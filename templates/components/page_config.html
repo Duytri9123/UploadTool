@@ -52,21 +52,21 @@
             <div class="card">
               <div class="card-header"><span class="card-title" data-i18n="lbl_translation">Dịch thuật</span></div>
               <div class="status-bar mb-12" id="translate-status">
-                <span class="dot dot-yellow"></span>Loading...
+                <span class="dot dot-yellow"></span><span data-i18n="lbl_loading">Loading...</span>
               </div>
               <div class="field">
                 <label data-i18n="lbl_preferred_provider">Provider ưu tiên</label>
                 <select id="cfg-preferred-provider">
-                  <option value="auto">Auto (Fallback)</option>
+                  <option value="auto" data-i18n="opt_auto_fallback">Auto (Fallback)</option>
                   <option value="deepseek">DeepSeek</option>
                   <option value="openai">OpenAI</option>
                   <option value="huggingface">HuggingFace</option>
                   <option value="google">Google Translate</option>
                 </select>
               </div>
-              <div class="field"><label>DeepSeek API Key</label><input type="password" id="cfg-deepseek-key" placeholder="sk-..."></div>
-              <div class="field"><label>OpenAI API Key</label><input type="password" id="cfg-openai-key" placeholder="sk-..."></div>
-              <div class="field"><label>HuggingFace Token</label><input type="password" id="cfg-hf-token" placeholder="hf_..."></div>
+              <div class="field"><label data-i18n="lbl_deepseek_api_key">DeepSeek API Key</label><input type="password" id="cfg-deepseek-key" placeholder="sk-..."></div>
+              <div class="field"><label data-i18n="lbl_openai_api_key">OpenAI API Key</label><input type="password" id="cfg-openai-key" placeholder="sk-..."></div>
+              <div class="field"><label data-i18n="lbl_hf_token">HuggingFace Token</label><input type="password" id="cfg-hf-token" placeholder="hf_..."></div>
             </div>
             <!-- Video Process Config -->
             <div class="card">
@@ -93,12 +93,12 @@
                     </select>
                   </div>
                   <div class="field">
-                    <label data-i18n="lbl_language">Ngon ngu goc</label>
+                    <label data-i18n="lbl_source_language">Ngon ngu goc</label>
                     <select id="vp-lang">
-                      <option value="zh" selected>Tieng Trung</option>
-                      <option value="en">Tieng Anh</option>
-                      <option value="ja">Tieng Nhat</option>
-                      <option value="ko">Tieng Han</option>
+                      <option value="zh" selected data-i18n="opt_lang_zh">Tieng Trung</option>
+                      <option value="en" data-i18n="opt_lang_en">Tieng Anh</option>
+                      <option value="ja" data-i18n="opt_lang_ja">Tieng Nhat</option>
+                      <option value="ko" data-i18n="opt_lang_ko">Tieng Han</option>
                     </select>
                   </div>
                 </div>
@@ -114,9 +114,9 @@
                   <div class="field">
                     <label data-i18n="lbl_blur_zone">Vung lam mo</label>
                     <select id="vp-blur-zone">
-                      <option value="bottom" selected>Duoi</option>
-                      <option value="top">Tren</option>
-                      <option value="none">Khong</option>
+                      <option value="bottom" selected data-i18n="opt_blur_bottom">Duoi</option>
+                      <option value="top" data-i18n="opt_blur_top">Tren</option>
+                      <option value="none" data-i18n="opt_blur_none">Khong</option>
                     </select>
                   </div>
                   <div class="field">
