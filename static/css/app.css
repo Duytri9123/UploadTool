@@ -318,6 +318,16 @@ tr:hover td { background: var(--bg3); color: var(--text); }
 }
 .vcard:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 6px 20px rgba(108,99,255,.2); }
 .vcard.selected { border-color: var(--accent); background: rgba(108,99,255,.08); }
+.vcard.in-queue {
+  cursor: not-allowed;
+  border-color: var(--border2);
+  opacity: .82;
+}
+.vcard.in-queue:hover {
+  transform: none;
+  box-shadow: none;
+  border-color: var(--border2);
+}
 .vcard-thumb {
   position: relative; aspect-ratio: 1 / 1; background: var(--bg4);
   overflow: hidden;
@@ -334,6 +344,19 @@ tr:hover td { background: var(--bg3); color: var(--text); }
 .vcard.selected .vcard-check { background: var(--accent); border-color: var(--accent); }
 .vcard:not(.selected) .vcard-check { opacity: 0; }
 .vcard:hover .vcard-check { opacity: 1; }
+.vcard.in-queue .vcard-check { display: none; }
+
+.vcard-lock {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  font-size: 12px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 10px;
+  background: rgba(0,0,0,.55);
+  border: 1px solid rgba(255,255,255,.25);
+}
 
 .vcard-dur {
   position: absolute; bottom: 5px; right: 5px;

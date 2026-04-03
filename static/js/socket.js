@@ -22,6 +22,7 @@ socket.on('downloading_url', d => {
 socket.on('queue_update', data => {
   _queue = data || [];
   renderQueue();
+  if (typeof onQueueStateChanged === 'function') onQueueStateChanged();
 });
 
 socket.on('done', d => {
@@ -30,5 +31,6 @@ socket.on('done', d => {
   _dlRunning = false;
   _downloadingUrl = null;
   renderQueue();
+  if (typeof onQueueStateChanged === 'function') onQueueStateChanged();
   toast(d.ok ? t('toast_dl_done') : t('toast_dl_error'), d.ok ? 'success' : 'error');
 });

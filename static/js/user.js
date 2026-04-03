@@ -2,6 +2,7 @@
 let _userVideos = [], _userPage = 1, _userPageSize = 20;
 let _userHasMore = false, _userNextCursor = 0, _userSecUid = '';
 let _selectedIds = new Set();
+let _queuedAwemeIds = new Set();
 let _viEnabled = true;
 let _viCache = {};
 let _translationScopeUrl = '';
@@ -151,6 +152,25 @@ function _hydratePageTranslations(items) {
   });
 }
 
+function _extractAwemeIdFromUrl(url) {
+  const m = String(url || '').match(/\/video\/(\d+)/);
+  return m ? m[1] : '';
+}
+
+function _syncQueuedAwemeIds() {
+  const list = Array.isArray(window._queue) ? window._queue : (Array.isArray(_queue) ? _queue : []);
+  const next = new Set();
+  list.forEach(item => {
+    const id = _extractAwemeIdFromUrl(item?.url);
+    if (id) next.add(id);
+  });
+  _queuedAwemeIds = next;
+}
+
+function _isAwemeInQueue(awemeId) {
+  return _queuedAwemeIds.has(String(awemeId || ''));
+}
+
 async function _fetchUserVideosPage(cursor, count) {
   const url = document.getElementById('user-url')?.value.trim();
   if (!url) return null;
@@ -204,6 +224,7 @@ function _applyFilters() {
 }
 
 function _renderVideos() {
+  _syncQueuedAwemeIds();
   const list = _applyFilters();
   const grid = document.getElementById('video-grid');
   const countEl = document.getElementById('video-count');
@@ -218,16 +239,19 @@ function _renderVideos() {
 
   grid.innerHTML = page.map((v, idx) => {
     const thumb = v.cover ? '/api/proxy_image?url=' + encodeURIComponent(v.cover) : '';
-    const sel = _selectedIds.has(v.aweme_id);
+    const inQueue = _isAwemeInQueue(v.aweme_id);
+    if (inQueue) _selectedIds.delete(v.aweme_id);
+    const sel = !inQueue && _selectedIds.has(v.aweme_id);
     const desc = (v.desc || '');
     const descVi = (_viEnabled && v.desc_vi) ? v.desc_vi : '';
     const durTxt = fmtDur(v.duration);
     const durationLabel = v.type === 'video' ? (durTxt || '--:--') : '';
     const loadAttr = 'eager';
-    return '<div class="vcard' + (sel ? ' selected' : '') + '" onclick="toggleSelect(\'' + v.aweme_id + '\')">' +
+    return '<div class="vcard' + (sel ? ' selected' : '') + (inQueue ? ' in-queue' : '') + '" onclick="toggleSelect(\'' + v.aweme_id + '\')">' +
       '<div class="vcard-thumb">' +
         (thumb ? '<img src="' + thumb + '" loading="' + loadAttr + '">' : '<div class="vcard-thumb-ph">&#127916;</div>') +
         '<div class="vcard-check">' + (sel ? '&#10003;' : '') + '</div>' +
+        (inQueue ? '<span class="vcard-lock">&#128274;</span>' : '') +
         (v.type === 'gallery' ? '<span class="vcard-type badge-gallery">&#128247;</span>' : '') +
         (durationLabel ? '<span class="vcard-dur">' + durationLabel + '</span>' : '') +
       '</div>' +
@@ -262,13 +286,16 @@ function _renderVideos() {
 }
 
 function toggleSelect(id) {
+  if (_isAwemeInQueue(id)) return;
   if (_selectedIds.has(id)) _selectedIds.delete(id);
   else _selectedIds.add(id);
   _renderVideos();
 }
 
 function selectAll() {
-  _applyFilters().forEach(v => _selectedIds.add(v.aweme_id));
+  _applyFilters().forEach(v => {
+    if (!_isAwemeInQueue(v.aweme_id)) _selectedIds.add(v.aweme_id);
+  });
   _renderVideos();
 }
 
@@ -284,13 +311,60 @@ function _updateSelCount() {
 async function downloadSelected() {
   const selected = _userVideos.filter(v => _selectedIds.has(v.aweme_id));
   if (!selected.length) return;
-  const items = selected.map(v => ({ url: 'https://www.douyin.com/video/' + v.aweme_id, desc: v.desc, cover: v.cover, date: v.date }));
+
+  await _ensureItemsTranslatedForQueue(selected);
+
+  const items = selected.map(v => ({
+    url: 'https://www.douyin.com/video/' + v.aweme_id,
+    desc: v.desc_vi || v.desc,
+    cover: v.cover,
+    date: v.date,
+  }));
   const res = await API.post('/api/queue/add', items);
   if (res?.added > 0) toast(t('toast_added_queue') + ' (' + res.added + ')', 'success');
   else toast('Khong co video moi duoc them (co the da ton tai)', 'warning');
   if (typeof loadQueue === 'function') loadQueue();
   _selectedIds.clear();
   _renderVideos();
+}
+
+async function _ensureItemsTranslatedForQueue(items) {
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) return;
+
+  const provider = document.getElementById('provider-select')?.value || 'auto';
+  if (provider !== _translationProvider) {
+    _setTranslationContext(_translationScopeUrl, provider);
+  }
+
+  list.forEach(v => {
+    if (!v.desc_vi) {
+      const cached = _getCachedTranslation(v.aweme_id);
+      if (cached) v.desc_vi = cached;
+    }
+  });
+
+  const needFetch = list.filter(v => !v.desc_vi && v.desc);
+  if (!needFetch.length) return;
+
+  try {
+    LoadingUI.start(t('lbl_translating'));
+    const res = await fetch('/api/translate_batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ texts: needFetch.map(v => v.desc), provider })
+    });
+    const data = await res.json();
+    const results = data.results || [];
+    needFetch.forEach((v, i) => {
+      v.desc_vi = results[i] || v.desc;
+      _storeCachedTranslation(v.aweme_id, v.desc_vi);
+    });
+  } catch (e) {
+    needFetch.forEach(v => { v.desc_vi = v.desc; });
+  } finally {
+    LoadingUI.stop();
+  }
 }
 
 function goPrev() {
@@ -339,6 +413,13 @@ async function goToPage(pageNumber) {
 async function _loadMoreVideos() {
   await _appendMoreVideos(_userNextCursor, 20, true);
 }
+
+function onQueueStateChanged() {
+  _syncQueuedAwemeIds();
+  _renderVideos();
+}
+
+window.onQueueStateChanged = onQueueStateChanged;
 
 async function searchUser() {
   const url = document.getElementById('user-url')?.value.trim();
