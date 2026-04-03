@@ -19,6 +19,91 @@ function toggleSidebar() {
   document.getElementById('sidebar').classList.toggle('collapsed');
 }
 
+/* ── Video Processing ────────────────────────────────────────────────────── */
+function startProcessVideo() {
+  const videoPath = document.getElementById('proc-video')?.value?.trim();
+  if (!videoPath) { alert('Vui lòng nhập đường dẫn file video'); return; }
+
+  const btn = document.getElementById('btn-proc');
+  if (btn) { btn.disabled = true; btn.textContent = 'Đang xử lý...'; }
+
+  // Reset UI
+  const logBox = document.getElementById('proc-log');
+  if (logBox) logBox.innerHTML = '';
+  _setProcProgress(0, 'Bắt đầu...');
+
+  const payload = {
+    video_path:       videoPath,
+    out_dir:          document.getElementById('proc-out')?.value?.trim() || '',
+    model:            document.getElementById('proc-model')?.value || 'base',
+    language:         document.getElementById('proc-lang')?.value || 'zh',
+    burn_subs:        document.getElementById('proc-burn')?.checked ?? true,
+    blur_original:    document.getElementById('proc-blur')?.checked ?? true,
+    blur_zone:        document.getElementById('proc-blur-zone')?.value || 'bottom',
+    blur_height_pct:  parseFloat(document.getElementById('proc-blur-height')?.value || '15') / 100,
+    font_size:        parseInt(document.getElementById('proc-font-size')?.value || '18'),
+    font_color:       document.getElementById('proc-font-color')?.value || 'white',
+    margin_v:         parseInt(document.getElementById('proc-margin-v')?.value || '30'),
+    translate_subs:   document.getElementById('proc-translate-subs')?.checked ?? false,
+    burn_vi_subs:     document.getElementById('proc-burn-vi')?.checked ?? false,
+    translate_provider: document.getElementById('proc-trans-provider')?.value || 'auto',
+    voice_convert:    document.getElementById('proc-voice')?.checked ?? false,
+    tts_engine:       document.getElementById('proc-tts-engine')?.value || 'edge-tts',
+    tts_voice:        document.getElementById('proc-tts-voice')?.value || 'vi-VN-HoaiMyNeural',
+    keep_bg_music:    document.getElementById('proc-keep-bg')?.checked ?? true,
+    bg_volume:        parseFloat(document.getElementById('proc-bg-vol')?.value || '0.15'),
+  };
+
+  fetch('/api/process_video', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).then(res => {
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    function read() {
+      reader.read().then(({ done, value }) => {
+        if (done) {
+          if (btn) { btn.disabled = false; btn.textContent = 'Xử lý Video'; }
+          return;
+        }
+        const text = decoder.decode(value, { stream: true });
+        text.split('\n').filter(l => l.trim()).forEach(line => {
+          try {
+            const d = JSON.parse(line);
+            if (d.log)         _appendProcLog(d.log, d.level || 'info');
+            if (d.overall !== undefined) _setProcProgress(d.overall, d.overall_lbl || '');
+          } catch {}
+        });
+        read();
+      });
+    }
+    read();
+  }).catch(err => {
+    _appendProcLog('Lỗi kết nối: ' + err, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Xử lý Video'; }
+  });
+}
+
+function _appendProcLog(msg, level) {
+  const box = document.getElementById('proc-log');
+  if (!box) return;
+  const div = document.createElement('div');
+  div.className = 'log-line log-' + (level || 'info');
+  div.textContent = msg;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+
+function _setProcProgress(pct, label) {
+  const bar = document.getElementById('pb-proc-overall');
+  const pctEl = document.getElementById('pb-proc-overall-pct');
+  const lblEl = document.getElementById('lbl-proc-overall');
+  if (bar)   bar.style.width = pct + '%';
+  if (pctEl) pctEl.textContent = pct + '%';
+  if (lblEl) lblEl.textContent = label || '';
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   applyI18n();
   switchPage('user');
@@ -26,4 +111,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.key === 'Enter') addManualUrl();
   });
   _initUserPageListeners();
+
+  // Toggle voice options visibility
+  document.getElementById('proc-voice')?.addEventListener('change', function() {
+    const opts = document.getElementById('proc-voice-opts');
+    if (opts) opts.style.display = this.checked ? 'block' : 'none';
+  });
 });

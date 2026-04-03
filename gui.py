@@ -456,10 +456,10 @@ class App(tk.Tk):
         for m,v in self.mode_vars.items(): v.set(m in modes)
         nums = cfg.get("number",{})
         for m,v in self.num_vars.items(): v.set(str(nums.get(m,0)))
-        self.var_music.set(cfg.get("music",True))
-        self.var_cover.set(cfg.get("cover",True))
-        self.var_json.set(cfg.get("json",True))
-        self.var_folder.set(cfg.get("folderstyle",True))
+        self.var_music.set(cfg.get("music",False))
+        self.var_cover.set(cfg.get("cover",False))
+        self.var_json.set(cfg.get("json",False))
+        self.var_folder.set(cfg.get("folderstyle",False))
         self.var_thread.set(str(cfg.get("thread",5)))
         self.var_retry.set(str(cfg.get("retry_times",3)))
         self.var_proxy.set(cfg.get("proxy",""))
@@ -620,7 +620,7 @@ class App(tk.Tk):
                 orig = url
                 try:
                     fm = FileManager(config.get("path"))
-                    rl = RateLimiter(max_per_second=float(config.get("rate_limit",2) or 2))
+                    rl = RateLimiter(max_per_second=float(config.get("rate_limit",5) or 5))
                     rh = RetryHandler(max_retries=config.get("retry_times",3))
                     qm = QueueManager(max_workers=int(config.get("thread",5) or 5))
                     async with DouyinAPIClient(cm.get_cookies(), proxy=config.get("proxy")) as api:

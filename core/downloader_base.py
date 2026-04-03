@@ -29,6 +29,9 @@ class ProgressReporter(Protocol):
     def advance_item(self, status: str, detail: str = "") -> None:
         ...
 
+    def update_post_progress(self, pct: int, label: str = "") -> None:
+        ...
+
 
 class DownloadResult:
     def __init__(self):
@@ -69,6 +72,7 @@ class BaseDownloader(ABC):
             self.config, self.file_manager, self.database
         )
         self._local_aweme_ids: Optional[set[str]] = None
+        self._local_aweme_legacy_scan_done = False
         self._aweme_id_pattern = re.compile(r"(?<!\d)(\d{15,20})(?!\d)")
         self._local_media_suffixes = {
             ".mp4",
@@ -108,6 +112,17 @@ class BaseDownloader(ABC):
             self.progress_reporter.advance_item(status, detail)
         except Exception as exc:
             logger.debug("Progress advance_item failed: %s", exc)
+
+    def _progress_post(self, pct: int, label: str = "") -> None:
+        if not self.progress_reporter:
+            return
+        updater = getattr(self.progress_reporter, "update_post_progress", None)
+        if not callable(updater):
+            return
+        try:
+            updater(int(pct), label)
+        except Exception as exc:
+            logger.debug("Progress update_post_progress failed: %s", exc)
 
     def _log_download_error(self, log_fn, message: str) -> None:
         if self._download_error_log_count < self._download_error_log_limit:
@@ -165,27 +180,94 @@ class BaseDownloader(ABC):
 
         if self._local_aweme_ids is None:
             return False
+
+        if aweme_id in self._local_aweme_ids:
+            return True
+
+        if not self._local_aweme_legacy_scan_done:
+            self._local_aweme_legacy_scan_done = True
+            self._scan_local_aweme_files()
+
         return aweme_id in self._local_aweme_ids
 
     def _build_local_aweme_index(self):
-        base_path = self.file_manager.base_path
-        aweme_ids: set[str] = set()
+        self._local_aweme_ids = set()
+        self._load_local_aweme_ids_from_manifest()
 
-        if base_path.exists():
-            for path in base_path.rglob("*"):
-                if not path.is_file():
-                    continue
-                if path.suffix.lower() not in self._local_media_suffixes:
-                    continue
-                try:
-                    if path.stat().st_size <= 0:
+    def _load_local_aweme_ids_from_manifest(self) -> None:
+        manifest_path = self.file_manager.base_path / "download_manifest.jsonl"
+        if not manifest_path.exists():
+            return
+
+        try:
+            with manifest_path.open("r", encoding="utf-8") as manifest_file:
+                for raw_line in manifest_file:
+                    line = raw_line.strip()
+                    if not line:
                         continue
-                except OSError:
-                    continue
-                for match in self._aweme_id_pattern.finditer(path.name):
-                    aweme_ids.add(match.group(1))
 
-        self._local_aweme_ids = aweme_ids
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    aweme_id = str(record.get("aweme_id") or "").strip()
+                    if not aweme_id or aweme_id in self._local_aweme_ids:
+                        continue
+
+                    if self._manifest_record_has_existing_file(record):
+                        self._local_aweme_ids.add(aweme_id)
+
+            logger.debug(
+                "Loaded %d aweme id(s) from download manifest",
+                len(self._local_aweme_ids),
+            )
+        except OSError as exc:
+            logger.warning("Failed to read download manifest %s: %s", manifest_path, exc)
+
+    def _manifest_record_has_existing_file(self, record: Dict[str, Any]) -> bool:
+        file_paths = record.get("file_paths")
+        if not isinstance(file_paths, list):
+            return False
+
+        for file_path in file_paths:
+            if not isinstance(file_path, str) or not file_path.strip():
+                continue
+
+            candidate = Path(file_path)
+            if not candidate.is_absolute():
+                candidate = self.file_manager.base_path / candidate
+
+            if self.file_manager.file_exists(candidate):
+                return True
+
+        return False
+
+    def _scan_local_aweme_files(self) -> None:
+        base_path = self.file_manager.base_path
+        if not base_path.exists():
+            return
+
+        scanned_ids = 0
+        for path in base_path.rglob("*"):
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in self._local_media_suffixes:
+                continue
+            try:
+                if path.stat().st_size <= 0:
+                    continue
+            except OSError:
+                continue
+            for match in self._aweme_id_pattern.finditer(path.name):
+                self._local_aweme_ids.add(match.group(1))
+                scanned_ids += 1
+
+        logger.debug(
+            "Loaded local aweme index from filesystem fallback, current size=%d, matches=%d",
+            len(self._local_aweme_ids),
+            scanned_ids,
+        )
 
     def _mark_local_aweme_downloaded(self, aweme_id: str):
         if not aweme_id:
@@ -246,7 +328,9 @@ class BaseDownloader(ABC):
             return False
 
         desc_raw = (aweme_data.get("desc", "no_title") or "").strip() or "no_title"
-        desc = self._resolve_naming_title(desc_raw)
+        custom_titles = self.config.get("custom_titles") or {}
+        custom_title = (custom_titles.get(aweme_id) or "").strip()
+        desc = custom_title if custom_title else self._resolve_naming_title(desc_raw)
         publish_ts, publish_date = self._resolve_publish_time(
             aweme_data.get("create_time")
         )
@@ -449,7 +533,11 @@ class BaseDownloader(ABC):
             # ── Post-download video processing (subtitle burn + voice) ──────
             vp_cfg = self.config.get("video_process") or {}
             if vp_cfg.get("enabled") and video_path.exists():
+                self._progress_post(5, "Bắt đầu hậu xử lý video")
                 await self._run_video_processor(video_path, vp_cfg, aweme_id)
+                self._progress_post(100, "Hoàn tất hậu xử lý")
+            else:
+                self._progress_post(0, "Hậu xử lý tắt")
 
         self._mark_local_aweme_downloaded(aweme_id)
         logger.info("Downloaded %s: %s (%s)", media_type, desc, aweme_id)
@@ -735,7 +823,6 @@ class BaseDownloader(ABC):
         self, video_path: Path, vp_cfg: dict, aweme_id: str
     ) -> None:
         """Run post-download video processing: burn subtitles + optional voice conversion."""
-        import asyncio as _asyncio
         from core.video_processor import (
             find_ffmpeg, transcribe_to_srt, burn_subtitles, convert_voice
         )
@@ -743,40 +830,70 @@ class BaseDownloader(ABC):
         ffmpeg = find_ffmpeg()
         if not ffmpeg:
             logger.warning("video_process: ffmpeg not found, skipping for %s", aweme_id)
+            self._progress_post(100, "Thiếu ffmpeg, bỏ qua hậu xử lý")
             return
 
         try:
             import whisper  # noqa: F401
         except ImportError:
             logger.warning("video_process: openai-whisper not installed, skipping for %s", aweme_id)
+            self._progress_post(100, "Thiếu openai-whisper, bỏ qua hậu xử lý")
             return
 
         logger.info("video_process: starting for %s", aweme_id)
         out_dir = video_path.parent
         stem = video_path.stem
 
+        custom_titles = self.config.get("custom_titles") or {}
+        custom_title = (custom_titles.get(aweme_id) or "").strip()
+        if custom_title:
+            post_title = sanitize_filename(custom_title)
+        else:
+            no_date = re.sub(r"^\d{4}-\d{2}-\d{2}_", "", stem)
+            no_id = re.sub(rf"_{re.escape(aweme_id)}$", "", no_date)
+            post_title = sanitize_filename(no_id or stem)
+        post_title = post_title or sanitize_filename(stem)
+
+        burn_original_subs = bool(vp_cfg.get("burn_subs"))
+        burn_vi_subs = bool(vp_cfg.get("burn_vi_subs"))
+        voice_convert = bool(vp_cfg.get("voice_convert"))
+        translate_enabled = bool(vp_cfg.get("translate_subs", vp_cfg.get("translate", True)))
+
+        if not (burn_original_subs or burn_vi_subs or voice_convert):
+            logger.info("video_process: no post-process steps enabled for %s", aweme_id)
+            self._progress_post(100, "Không bật hậu xử lý")
+            return
+
+        raw_srt_path = out_dir / f"{stem}.srt"
+        vi_srt_path = None
+
         # Step 1: Transcribe → SRT
+        self._progress_post(15, "Đang tạo phụ đề gốc")
         try:
             srt_path, segments = transcribe_to_srt(
                 video_path=video_path,
                 ffmpeg=ffmpeg,
-                model_name=vp_cfg.get("whisper_model", "base"),
+                model_name=vp_cfg.get("model", vp_cfg.get("whisper_model", "base")),
                 language=vp_cfg.get("language", "zh"),
-                out_srt=out_dir / f"{stem}.srt",
+                out_srt=raw_srt_path,
             )
         except Exception as e:
             logger.warning("video_process: transcription failed for %s: %s", aweme_id, e)
+            self._progress_post(100, "Tạo phụ đề thất bại")
             return
 
         if not segments:
             logger.info("video_process: no speech detected for %s", aweme_id)
+            self._progress_post(100, "Không phát hiện lời nói")
             return
 
         logger.info("video_process: transcribed %d segments for %s", len(segments), aweme_id)
 
         # Step 2: Translate ZH → VI if needed
         translated_texts: list = []
-        if vp_cfg.get("translate_subs") or vp_cfg.get("voice_convert"):
+        need_translation = translate_enabled or burn_vi_subs or voice_convert
+        if need_translation:
+            self._progress_post(40, "Đang dịch phụ đề")
             try:
                 from utils.translation import translate_texts
                 trans_cfg = self.config.get("translation") or {}
@@ -786,9 +903,9 @@ class BaseDownloader(ABC):
                 logger.info("video_process: translated %d segments via %s", len(translated_texts), used)
 
                 # Write VI SRT
-                if translated_texts and vp_cfg.get("translate_subs"):
+                if translated_texts and burn_vi_subs:
                     from core.video_processor import _fmt_srt_time
-                    vi_srt_path = out_dir / f"{stem}_vi.srt"
+                    vi_srt_path = out_dir / f"{post_title}_vi.srt"
                     vi_lines = []
                     for i, (seg, vi_text) in enumerate(zip(segments, translated_texts), 1):
                         if vi_text and vi_text.strip():
@@ -796,15 +913,18 @@ class BaseDownloader(ABC):
                                 f"{i}\n{_fmt_srt_time(seg['start'])} --> {_fmt_srt_time(seg['end'])}\n{vi_text}\n"
                             )
                     vi_srt_path.write_text("\n".join(vi_lines), encoding="utf-8")
-                    if vp_cfg.get("burn_vi_subs"):
+                    if burn_vi_subs:
                         srt_path = vi_srt_path
+                self._progress_post(60, "Dịch phụ đề hoàn tất")
             except Exception as e:
                 logger.warning("video_process: translation failed for %s: %s", aweme_id, e)
+                self._progress_post(60, "Dịch phụ đề lỗi, dùng phụ đề gốc")
 
         # Step 3: Burn subtitles + blur original text
         processed_path = None
-        if vp_cfg.get("burn_subs") and srt_path and srt_path.exists():
-            out_video = out_dir / f"{stem}_processed.mp4"
+        if burn_original_subs and srt_path and srt_path.exists():
+            self._progress_post(75, "Đang burn phụ đề")
+            out_video = out_dir / f"{post_title}_processed.mp4"
             ok, err = burn_subtitles(
                 video_path=video_path,
                 srt_path=srt_path,
@@ -822,32 +942,60 @@ class BaseDownloader(ABC):
             if ok:
                 processed_path = out_video
                 logger.info("video_process: subtitles burned → %s", out_video.name)
+                self._progress_post(85, "Burn phụ đề xong")
             else:
                 logger.warning("video_process: subtitle burn failed for %s: %s", aweme_id, err)
+                self._progress_post(85, "Burn phụ đề lỗi")
 
         # Step 4: Voice conversion ZH → VI
-        if vp_cfg.get("voice_convert") and translated_texts and segments:
+        voice_out = None
+        if voice_convert and translated_texts and segments:
+            self._progress_post(90, "Đang tạo giọng tiếng Việt")
             source = processed_path if processed_path else video_path
-            voice_out = out_dir / f"{stem}_vi_voice.mp4"
+            voice_out = out_dir / f"{post_title}_vi_voice.mp4"
             try:
-                ok, err = _asyncio.get_event_loop().run_until_complete(
-                    convert_voice(
-                        video_path=source,
-                        segments=segments,
-                        translated_texts=translated_texts,
-                        output_path=voice_out,
-                        ffmpeg=ffmpeg,
-                        tts_voice=vp_cfg.get("tts_voice", "vi-VN-HoaiMyNeural"),
-                        tts_engine=vp_cfg.get("tts_engine", "edge-tts"),
-                        keep_bg_music=vp_cfg.get("keep_bg_music", True),
-                        bg_volume=float(vp_cfg.get("bg_volume", 0.15)),
-                    )
+                ok, err = await convert_voice(
+                    video_path=source,
+                    segments=segments,
+                    translated_texts=translated_texts,
+                    output_path=voice_out,
+                    ffmpeg=ffmpeg,
+                    tts_voice=vp_cfg.get("tts_voice", "vi-VN-HoaiMyNeural"),
+                    tts_engine=vp_cfg.get("tts_engine", "edge-tts"),
+                    keep_bg_music=vp_cfg.get("keep_bg_music", vp_cfg.get("keep_bg", True)),
+                    bg_volume=float(vp_cfg.get("bg_volume", 0.15)),
                 )
                 if ok:
                     logger.info("video_process: voice converted → %s", voice_out.name)
+                    self._progress_post(100, "Đã tạo giọng tiếng Việt")
                 else:
                     logger.warning("video_process: voice conversion failed for %s: %s", aweme_id, err)
+                    self._progress_post(100, "Đổi giọng thất bại")
             except Exception as e:
                 logger.warning("video_process: voice conversion error for %s: %s", aweme_id, e)
+                self._progress_post(100, "Đổi giọng gặp lỗi")
+
+        # Keep only processed + voice outputs when both subtitle burn and voice are enabled.
+        if burn_original_subs and voice_convert and processed_path and voice_out and voice_out.exists():
+            keep_files = {processed_path.resolve(), voice_out.resolve()}
+            cleanup_candidates = {
+                video_path,
+                raw_srt_path,
+                srt_path,
+                vi_srt_path,
+                out_dir / f"{stem}_processed.mp4",
+                out_dir / f"{stem}_vi_voice.mp4",
+                out_dir / f"{stem}_vi.srt",
+            }
+            for path in cleanup_candidates:
+                if not path:
+                    continue
+                p = Path(path)
+                if not p.exists() or p.resolve() in keep_files:
+                    continue
+                try:
+                    p.unlink()
+                except Exception as e:
+                    logger.debug("video_process: cleanup skipped for %s: %s", p, e)
 
         logger.info("video_process: done for %s", aweme_id)

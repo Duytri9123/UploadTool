@@ -131,10 +131,10 @@ def build_config_tab():
 
         gr.Markdown("### Options")
         with gr.Row():
-            opt_music  = gr.Checkbox(value=cfg.get("music",True),      label="Download Music")
-            opt_cover  = gr.Checkbox(value=cfg.get("cover",True),      label="Download Cover")
-            opt_json   = gr.Checkbox(value=cfg.get("json",True),       label="Save JSON")
-            opt_folder = gr.Checkbox(value=cfg.get("folderstyle",True),label="Folder per user")
+            opt_music  = gr.Checkbox(value=cfg.get("music",False),      label="Download Music")
+            opt_cover  = gr.Checkbox(value=cfg.get("cover",False),      label="Download Cover")
+            opt_json   = gr.Checkbox(value=cfg.get("json",False),       label="Save JSON")
+            opt_folder = gr.Checkbox(value=cfg.get("folderstyle",False),label="Folder per user")
 
         gr.Markdown("### Advanced")
         with gr.Row():
@@ -310,7 +310,7 @@ def build_download_tab():
                         orig = url
                         try:
                             fm = FileManager(config.get("path"))
-                            rl = RateLimiter(max_per_second=float(config.get("rate_limit",2) or 2))
+                            rl = RateLimiter(max_per_second=float(config.get("rate_limit",5) or 5))
                             rh = RetryHandler(max_retries=config.get("retry_times",3))
                             qm = QueueManager(max_workers=int(config.get("thread",5) or 5))
                             async with DouyinAPIClient(cm.get_cookies(), proxy=config.get("proxy")) as api:

@@ -103,6 +103,24 @@ def queue_reorder():
     socketio.emit("queue_update", list(_dl_queue))
     return jsonify({"ok": True})
 
+@app.route("/api/queue/update", methods=["POST"])
+def queue_update():
+    data = request.json or {}
+    url = (data.get("url") or "").strip()
+    desc = (data.get("desc") or "").strip()
+    if not url:
+        return jsonify({"ok": False, "error": "missing url"}), 400
+    with _queue_lock:
+        updated = False
+        for item in _dl_queue:
+            if item.get("url") == url:
+                item["desc"] = desc or url
+                updated = True
+                break
+    if updated:
+        socketio.emit("queue_update", list(_dl_queue))
+    return jsonify({"ok": updated})
+
 @app.route("/api/queue/clear", methods=["POST"])
 def queue_clear():
     with _queue_lock: _dl_queue.clear()
@@ -141,6 +159,7 @@ class SocketProgress:
         self._sid = sid
         self._step = 0; self._item_done = 0; self._item_total = 1
         self._url_i = 0; self._url_n = 0
+        self._url = ""
         self._stats = {"success":0,"failed":0,"skipped":0}
 
     def _emit(self, event, data):
@@ -164,6 +183,7 @@ class SocketProgress:
 
     def start_url(self,i,n,url):
         self._url_i=i; self._url_n=n; self._step=0
+        self._url = url
         self._item_done=0; self._item_total=1
         self._stats={"success":0,"failed":0,"skipped":0}
         self._emit("progress", {"type":"step","pct":0,"label":f"[{i}/{n}] 待开始"})
@@ -194,8 +214,15 @@ class SocketProgress:
     def set_item_total(self,total,detail=""):
         self._item_total=max(total,1); self._item_done=0
         self._stats={"success":0,"failed":0,"skipped":0}
-        self._emit("progress", {"type":"item","pct":0,"label":f"作品 0/{total}"})
+        self._emit("progress", {"type":"item","pct":0,"label":f"作品 0/{total}","url":self._url})
         if detail: self._log(f"   {detail}", "detail")
+
+    def update_post_progress(self,pct,label=""):
+        try:
+            p = max(0, min(100, int(pct)))
+        except Exception:
+            p = 0
+        self._emit("progress", {"type":"post","pct":p,"label":label or "","url":self._url})
 
     def advance_item(self,status,detail=""):
         if status in self._stats: self._stats[status]+=1
@@ -203,7 +230,7 @@ class SocketProgress:
         pct=int(self._item_done/self._item_total*100)
         s=self._stats
         self._emit("progress", {"type":"item","pct":pct,
-            "label":f"作品 {self._item_done}/{self._item_total}  ✓{s['success']} ✗{s['failed']} -{s['skipped']}"})
+            "label":f"作品 {self._item_done}/{self._item_total}  ✓{s['success']} ✗{s['failed']} -{s['skipped']}","url":self._url})
 
     def show_result(self,result):
         self._log(f"{'─'*44}", "result")
@@ -571,6 +598,7 @@ def handle_download(data):
     # queue mode: download items from queue one by one
     use_queue = (data or {}).get("use_queue", False)
     extra_url = (data or {}).get("extra_url","").strip()
+    post_process = (data or {}).get("post_process") or {}
 
     def run():
         global _dl_running
@@ -589,9 +617,11 @@ def handle_download(data):
             config = ConfigLoader(str(CONFIG_FILE))
 
             # build URL list
+            queue_snapshot = []
             if use_queue:
                 with _queue_lock:
-                    urls = [i["url"] for i in list(_dl_queue)]
+                    queue_snapshot = list(_dl_queue)
+                    urls = [i["url"] for i in queue_snapshot]
             elif extra_url:
                 urls = [extra_url]
             else:
@@ -602,6 +632,40 @@ def handle_download(data):
 
             # override config links
             config.update(link=urls)
+
+            # Optional title overrides from queue (used for filename naming).
+            if queue_snapshot:
+                custom_titles = {}
+                for item in queue_snapshot:
+                    item_url = str(item.get("url") or "").strip()
+                    item_desc = str(item.get("desc") or "").strip()
+                    if not item_url or not item_desc:
+                        continue
+                    parsed_item = URLParser.parse(item_url) or {}
+                    aweme_id = str(parsed_item.get("aweme_id") or "").strip()
+                    if aweme_id:
+                        custom_titles[aweme_id] = item_desc
+                if custom_titles:
+                    config.update(custom_titles=custom_titles)
+
+            # Optional one-time post-process overrides from Download page.
+            vp_cfg = dict(config.get("video_process") or {})
+            pp_enabled = bool(post_process.get("enabled", True))
+            if pp_enabled:
+                vp_cfg.update({
+                    "enabled": True,
+                    "burn_subs": bool(post_process.get("burn_subs", True)),
+                    "translate_subs": bool(post_process.get("translate_subs", True)),
+                    "burn_vi_subs": bool(post_process.get("burn_vi_subs", True)),
+                    "voice_convert": bool(post_process.get("voice_convert", True)),
+                    "keep_bg_music": bool(post_process.get("keep_bg_music", False)),
+                })
+            elif post_process:
+                vp_cfg.update({"enabled": False})
+
+            if vp_cfg:
+                config.update(video_process=vp_cfg)
+
             if not config.validate():
                 prog.print_error("Invalid config"); return
 
@@ -623,9 +687,10 @@ def handle_download(data):
                         prog.start_url(i, len(urls), url); orig = url
                         # Notify frontend which URL is currently downloading
                         socketio.emit("downloading_url", {"url": orig, "index": i, "total": len(urls)}, to=sid)
+                        socketio.emit("queue_item_state", {"url": orig, "state": "running"}, to=sid)
                         try:
                             fm = FileManager(config.get("path"))
-                            rl = RateLimiter(max_per_second=float(config.get("rate_limit",2) or 2))
+                            rl = RateLimiter(max_per_second=float(config.get("rate_limit",5) or 5))
                             rh = RetryHandler(max_retries=config.get("retry_times",3))
                             qm = QueueManager(max_workers=int(config.get("thread",5) or 5))
                             async with DouyinAPIClient(cm.get_cookies(), proxy=config.get("proxy")) as api:
@@ -647,6 +712,7 @@ def handle_download(data):
                                 prog.advance_step("收尾","")
                                 if result:
                                     results.append(result); prog.complete_url(result)
+                                    socketio.emit("queue_item_state", {"url": orig, "state": "success"}, to=sid)
                                     # remove from queue after success
                                     if use_queue:
                                         with _queue_lock:
@@ -655,8 +721,10 @@ def handle_download(data):
                                                     del _dl_queue[idx2]; break
                                         socketio.emit("queue_update", list(_dl_queue), to=sid)
                                 else:
+                                    socketio.emit("queue_item_state", {"url": orig, "state": "failed"}, to=sid)
                                     prog.fail_url("No result")
                         except Exception as e:
+                            socketio.emit("queue_item_state", {"url": orig, "state": "failed"}, to=sid)
                             prog.fail_url(str(e)); prog.print_error(str(e))
                 finally:
                     prog.stop_download_session()
@@ -790,6 +858,24 @@ def transcribe():
         yield send(overall=100, overall_lbl="完成", file=100, file_lbl="")
 
     return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
+
+@app.route("/api/process_video", methods=["POST"])
+def process_video():
+    data = request.json or {}
+    import json as _j
+    from flask import Response, stream_with_context
+
+    def generate():
+        from core.video_processor import process_video_full
+        try:
+            for line in process_video_full(data):
+                yield line
+        except Exception as e:
+            yield _j.dumps({"log": f"Fatal error: {e}", "level": "error"}, ensure_ascii=False) + "\n"
+            yield _j.dumps({"overall": 0, "overall_lbl": "Error"}, ensure_ascii=False) + "\n"
+
+    return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
+
 
 @app.route("/api/auto_fetch_cookie", methods=["POST"])
 def auto_fetch_cookie():

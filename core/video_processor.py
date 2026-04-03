@@ -321,13 +321,6 @@ async def convert_voice(
         shutil.copy2(str(video_path), str(tmp_video))
 
         # get video duration
-        dur_result = subprocess.run(
-            [ffmpeg.replace("ffmpeg", "ffprobe") if "ffprobe" not in ffmpeg else ffmpeg,
-             "-v", "error", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1", str(tmp_video)],
-            capture_output=True, text=True
-        )
-        # fallback: use ffmpeg itself
         dur_result2 = subprocess.run(
             [ffmpeg, "-i", str(tmp_video), "-f", "null", "-"],
             capture_output=True, text=True

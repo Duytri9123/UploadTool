@@ -152,6 +152,35 @@ async def test_should_download_skips_when_aweme_exists_locally(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_should_download_uses_manifest_index(tmp_path):
+    downloader, api_client = _build_downloader(tmp_path)
+    aweme_id = "7600223638943468864"
+
+    stored_file = tmp_path / "nested" / "output.bin"
+    stored_file.parent.mkdir(parents=True, exist_ok=True)
+    stored_file.write_bytes(b"1")
+
+    manifest_path = tmp_path / "download_manifest.jsonl"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "aweme_id": aweme_id,
+                "file_paths": ["nested/output.bin"],
+                "file_names": ["output.bin"],
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    should_download = await downloader._should_download(aweme_id)
+    assert should_download is False
+
+    await api_client.close()
+
+
+@pytest.mark.asyncio
 async def test_download_aweme_assets_uses_publish_date_and_writes_manifest(
     tmp_path, monkeypatch
 ):
