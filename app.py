@@ -529,14 +529,19 @@ def user_info():
                     if ul: cover = ul[0]
             ts = item.get("create_time",0)
             dt = datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else ""
+            duration = (item.get("video") or {}).get("duration", 0) or \
+                       (item.get("video") or {}).get("video_duration", 0) or \
+                       item.get("duration", 0) or 0
             videos.append({
                 "aweme_id": item.get("aweme_id",""),
                 "desc":     (item.get("desc","") or "")[:60],
                 "cover":    cover,
                 "date":     dt,
+                "ts":       ts,
                 "play":     item.get("statistics",{}).get("play_count",0),
                 "like":     item.get("statistics",{}).get("digg_count",0),
                 "type":     "gallery" if item.get("images") else "video",
+                "duration": duration,
             })
 
         return jsonify({

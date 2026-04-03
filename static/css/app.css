@@ -246,7 +246,7 @@ input[type=checkbox].toggle-input { display: none; }
 
 /* ── Toast ─────────────────────────────────────────────────────────────────── */
 #toasts {
-  position: fixed; bottom: 20px; right: 20px;
+  position: fixed; top: 20px; right: 20px;
   display: flex; flex-direction: column; gap: 8px; z-index: 9999;
 }
 .toast {
@@ -265,7 +265,7 @@ input[type=checkbox].toggle-input { display: none; }
 
 /* ── Global loading ────────────────────────────────────────────────────────── */
 #global-loading {
-  position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+  position: fixed; right: 16px; bottom: 16px;
   background: var(--bg3); border: 1px solid var(--border2);
   border-radius: 20px; padding: 8px 16px;
   display: none; align-items: center; gap: 10px;
@@ -363,6 +363,12 @@ tr:hover td { background: var(--bg3); color: var(--text); }
   color: var(--text);
   font-size: 12px;
   text-align: center;
+}
+input.page-jump-input {
+  width: 64px;
+  min-width: 64px;
+  max-width: 64px;
+  flex: 0 0 64px;
 }
 .page-jump-input:focus {
   outline: none;

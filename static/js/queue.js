@@ -69,9 +69,11 @@ async function addManualUrl() {
   const input = document.getElementById('manual-url');
   const url = (input?.value || '').trim();
   if (!url) return;
-  await API.post('/api/queue/add', [{ url, desc: url, cover: '', date: '' }]);
+  const res = await API.post('/api/queue/add', [{ url, desc: url, cover: '', date: '' }]);
   input.value = '';
-  toast(t('toast_added_queue'), 'success');
+  if (res?.added > 0) toast(t('toast_added_queue') + ' (' + res.added + ')', 'success');
+  else toast('URL da ton tai trong hang doi', 'warning');
+  loadQueue();
 }
 
 function startQueueDownload() {
