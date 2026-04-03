@@ -24,9 +24,9 @@ function renderQueue() {
 
     let statusBadge = '';
     if (isDownloading) {
-      statusBadge = '<span class="queue-status downloading"><span class="spinner-sm"></span> Đang tải...</span>';
+      statusBadge = '<span class="queue-status downloading"><span class="spinner-sm"></span> ' + t('lbl_queue_downloading') + '</span>';
     } else if (_dlRunning && idx === _getNextIndex()) {
-      statusBadge = '<span class="queue-status next">Tiếp theo</span>';
+      statusBadge = '<span class="queue-status next">' + t('lbl_queue_next') + '</span>';
     }
 
     return '<div class="queue-item' + (isDownloading ? ' queue-item-active' : '') + '">' +
@@ -40,8 +40,8 @@ function renderQueue() {
       '</div>' +
       // Ẩn nút xóa khi đang tải item đó
       (!isDownloading
-        ? '<button class="btn btn-sm btn-danger" onclick="removeFromQueue(\'' + escHtml(item.url) + '\')" title="Xóa">×</button>'
-        : '<span class="queue-lock" title="Đang tải">&#128274;</span>'
+        ? '<button class="btn btn-sm btn-danger" onclick="removeFromQueue(\'' + escHtml(item.url) + '\')" title="' + escHtml(t('ttl_remove_queue_item')) + '">×</button>'
+        : '<span class="queue-lock" title="' + escHtml(t('ttl_queue_item_locked')) + '">&#128274;</span>'
       ) +
     '</div>';
   }).join('');
@@ -72,7 +72,7 @@ async function addManualUrl() {
   const res = await API.post('/api/queue/add', [{ url, desc: url, cover: '', date: '' }]);
   input.value = '';
   if (res?.added > 0) toast(t('toast_added_queue') + ' (' + res.added + ')', 'success');
-  else toast('URL da ton tai trong hang doi', 'warning');
+  else toast(t('toast_url_exists'), 'warning');
   loadQueue();
 }
 
