@@ -1,0 +1,28 @@
+      <!-- PAGE: HISTORY -->
+      <div id="page-history" class="page">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title" data-i18n="lbl_history">Lịch sử tải xuống</span>
+            <div class="card-actions">
+              <button class="btn btn-secondary btn-sm" onclick="loadHistory()" data-i18n="btn_refresh">Làm mới</button>
+              <button class="btn btn-danger btn-sm" onclick="clearHistory()" data-i18n="btn_clear_history">Xóa lịch sử</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th data-i18n="th_time">Thời gian</th>
+                  <th data-i18n="th_url">URL</th>
+                  <th data-i18n="th_type">Loại</th>
+                  <th data-i18n="th_total">Tổng</th>
+                  <th data-i18n="th_success">Thành công</th>
+                </tr>
+              </thead>
+              <tbody id="history-body">
+                <tr><td colspan="5" class="empty-state" data-i18n="lbl_no_history">Chưa có lịch sử</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>

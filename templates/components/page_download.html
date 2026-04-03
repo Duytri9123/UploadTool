@@ -1,0 +1,60 @@
+      <!-- PAGE: DOWNLOAD -->
+      <div id="page-download" class="page">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start">
+          <div>
+            <div class="card">
+              <div class="card-header">
+                <span class="card-title"><span data-i18n="lbl_queue">Hàng chờ</span> (<span id="queue-count">0</span>)</span>
+                <div class="card-actions">
+                  <button class="btn btn-danger btn-sm" onclick="clearQueue()" data-i18n="btn_clear_queue">Xóa hàng chờ</button>
+                </div>
+              </div>
+              <div class="flex-center gap-8 mb-12">
+                <input type="text" id="manual-url" data-i18n="placeholder_manual_url" data-i18n-attr="placeholder" placeholder="Dán URL video..." style="flex:1">
+                <button class="btn btn-secondary btn-sm" onclick="addManualUrl()" data-i18n="btn_add">Thêm</button>
+              </div>
+              <div id="queue-list" style="max-height:420px;overflow-y:auto">
+                <div class="empty-state" data-i18n="lbl_queue_empty">Hàng chờ trống</div>
+              </div>
+            </div>
+          </div>
+          <div>
+            <div class="card">
+              <div class="card-header"><span class="card-title" data-i18n="lbl_dl_control">Điều khiển tải xuống</span></div>
+              <button class="btn btn-primary" id="btn-dl" onclick="startQueueDownload()" style="width:100%;justify-content:center;margin-bottom:14px" data-i18n="btn_start_dl">
+                Bắt đầu tải
+              </button>
+              <div class="progress-section">
+                <div class="section-title" data-i18n="lbl_progress">Tiến trình</div>
+                <div class="progress-row">
+                  <span class="progress-label" data-i18n="lbl_overall">Tổng thể</span>
+                  <div class="progress-bar-wrap"><div class="progress-bar pb-overall" id="pb-overall"></div></div>
+                  <span class="progress-pct" id="pb-overall-pct">0%</span>
+                </div>
+                <div class="progress-info text-muted" id="lbl-overall">--</div>
+                <div class="progress-row mt-8">
+                  <span class="progress-label" data-i18n="lbl_step">Bước</span>
+                  <div class="progress-bar-wrap"><div class="progress-bar pb-step" id="pb-step"></div></div>
+                  <span class="progress-pct" id="pb-step-pct">0%</span>
+                </div>
+                <div class="progress-info text-muted" id="lbl-step">--</div>
+                <div class="progress-row mt-8">
+                  <span class="progress-label" data-i18n="lbl_items">Mục</span>
+                  <div class="progress-bar-wrap"><div class="progress-bar pb-item" id="pb-item"></div></div>
+                  <span class="progress-pct" id="pb-item-pct">0%</span>
+                </div>
+                <div class="progress-info text-muted" id="lbl-item">--</div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-header">
+                <span class="card-title" data-i18n="lbl_log">Nhật ký</span>
+                <div class="card-actions">
+                  <button class="btn btn-secondary btn-sm" onclick="clearLog('dl-log')" data-i18n="btn_clear_log">Xóa</button>
+                </div>
+              </div>
+              <div class="log-box" id="dl-log"></div>
+            </div>
+          </div>
+        </div>
+      </div>

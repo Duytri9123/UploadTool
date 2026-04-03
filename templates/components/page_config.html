@@ -1,0 +1,149 @@
+      <!-- PAGE: CONFIG -->
+      <div id="page-config" class="page">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start">
+          <div>
+            <div class="card">
+              <div class="card-header"><span class="card-title" data-i18n="lbl_dl_settings">Cài đặt tải xuống</span></div>
+              <div class="field">
+                <label data-i18n="lbl_urls">Danh sách URL</label>
+                <textarea id="cfg-urls" style="min-height:100px" placeholder="https://www.douyin.com/user/..."></textarea>
+              </div>
+              <div class="grid-2">
+                <div class="field"><label data-i18n="lbl_save_path">Thư mục lưu</label><input type="text" id="cfg-path" placeholder="./Downloaded/"></div>
+                <div class="field"><label data-i18n="lbl_proxy">Proxy</label><input type="text" id="cfg-proxy" placeholder="http://127.0.0.1:7890"></div>
+                <div class="field"><label data-i18n="lbl_threads">Luồng</label><input type="number" id="cfg-thread" min="1" max="20" value="5"></div>
+                <div class="field"><label data-i18n="lbl_retries">Thử lại</label><input type="number" id="cfg-retry" min="0" max="10" value="3"></div>
+                <div class="field"><label data-i18n="lbl_start_date">Ngày bắt đầu</label><input type="text" id="cfg-start" placeholder="2024-01-01"></div>
+                <div class="field"><label data-i18n="lbl_end_date">Ngày kết thúc</label><input type="text" id="cfg-end" placeholder="2025-12-31"></div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-header"><span class="card-title" data-i18n="lbl_dl_modes">Chế độ tải</span></div>
+              <div class="check-grid" id="mode-checks">
+                <label class="check-item"><input type="checkbox" value="post" checked><span>Post</span></label>
+                <label class="check-item"><input type="checkbox" value="like"><span>Like</span></label>
+                <label class="check-item"><input type="checkbox" value="collect"><span>Collect</span></label>
+                <label class="check-item"><input type="checkbox" value="music"><span>Music</span></label>
+                <label class="check-item"><input type="checkbox" value="mix"><span>Mix</span></label>
+                <label class="check-item"><input type="checkbox" value="collectmix"><span>CollectMix</span></label>
+              </div>
+              <hr class="divider">
+              <div class="section-title" data-i18n="lbl_max_items">Số lượng tối đa</div>
+              <div class="grid-3">
+                <div class="field"><label>Post</label><input type="number" id="n-post" min="0" value="0"></div>
+                <div class="field"><label>Like</label><input type="number" id="n-like" min="0" value="0"></div>
+                <div class="field"><label>Collect</label><input type="number" id="n-collect" min="0" value="0"></div>
+                <div class="field"><label>Music</label><input type="number" id="n-music" min="0" value="0"></div>
+                <div class="field"><label>Mix</label><input type="number" id="n-mix" min="0" value="0"></div>
+                <div class="field"><label>CollectMix</label><input type="number" id="n-collectmix" min="0" value="0"></div>
+              </div>
+            </div>
+          </div>
+          <div>
+            <div class="card">
+              <div class="card-header"><span class="card-title" data-i18n="lbl_options">Tùy chọn</span></div>
+              <div class="check-grid">
+                <label class="check-item"><input type="checkbox" id="opt-music" checked><span data-i18n="lbl_music">Nhạc</span></label>
+                <label class="check-item"><input type="checkbox" id="opt-cover" checked><span data-i18n="lbl_cover">Ảnh bìa</span></label>
+                <label class="check-item"><input type="checkbox" id="opt-json" checked><span>JSON</span></label>
+                <label class="check-item"><input type="checkbox" id="opt-folder" checked><span data-i18n="lbl_folder">Thư mục</span></label>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-header"><span class="card-title" data-i18n="lbl_translation">Dịch thuật</span></div>
+              <div class="status-bar mb-12" id="translate-status">
+                <span class="dot dot-yellow"></span>Loading...
+              </div>
+              <div class="field">
+                <label data-i18n="lbl_preferred_provider">Provider ưu tiên</label>
+                <select id="cfg-preferred-provider">
+                  <option value="auto">Auto (Fallback)</option>
+                  <option value="deepseek">DeepSeek</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="huggingface">HuggingFace</option>
+                  <option value="google">Google Translate</option>
+                </select>
+              </div>
+              <div class="field"><label>DeepSeek API Key</label><input type="password" id="cfg-deepseek-key" placeholder="sk-..."></div>
+              <div class="field"><label>OpenAI API Key</label><input type="password" id="cfg-openai-key" placeholder="sk-..."></div>
+              <div class="field"><label>HuggingFace Token</label><input type="password" id="cfg-hf-token" placeholder="hf_..."></div>
+            </div>
+            <!-- Video Process Config -->
+            <div class="card">
+              <div class="card-header">
+                <span class="card-title" data-i18n="lbl_vp_title">Xu ly video sau khi tai</span>
+                <div class="card-actions">
+                  <label class="toggle-wrap">
+                    <input type="checkbox" class="toggle-input" id="vp-enabled">
+                    <div class="toggle"></div>
+                    <span class="toggle-label text-sm" data-i18n="lbl_enable">Bat</span>
+                  </label>
+                </div>
+              </div>
+              <div id="vp-opts">
+                <div class="grid-2">
+                  <div class="field">
+                    <label data-i18n="lbl_model">Mo hinh Whisper</label>
+                    <select id="vp-model">
+                      <option value="tiny">tiny</option>
+                      <option value="base" selected>base</option>
+                      <option value="small">small</option>
+                      <option value="medium">medium</option>
+                      <option value="large">large</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label data-i18n="lbl_language">Ngon ngu goc</label>
+                    <select id="vp-lang">
+                      <option value="zh" selected>Tieng Trung</option>
+                      <option value="en">Tieng Anh</option>
+                      <option value="ja">Tieng Nhat</option>
+                      <option value="ko">Tieng Han</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="check-grid mb-12">
+                  <label class="check-item"><input type="checkbox" id="vp-burn" checked><span data-i18n="lbl_burn_subs">Burn phu de</span></label>
+                  <label class="check-item"><input type="checkbox" id="vp-blur" checked><span data-i18n="lbl_blur_original">Lam mo text goc</span></label>
+                  <label class="check-item"><input type="checkbox" id="vp-translate" checked><span data-i18n="lbl_translate_subs">Dich sang VI</span></label>
+                  <label class="check-item"><input type="checkbox" id="vp-burn-vi" checked><span data-i18n="lbl_burn_vi_subs">Burn phu de VI</span></label>
+                  <label class="check-item"><input type="checkbox" id="vp-voice"><span data-i18n="lbl_voice_convert">Doi giong VI</span></label>
+                  <label class="check-item"><input type="checkbox" id="vp-keep-bg" checked><span data-i18n="lbl_keep_bg">Giu nhac nen</span></label>
+                </div>
+                <div class="grid-2">
+                  <div class="field">
+                    <label data-i18n="lbl_blur_zone">Vung lam mo</label>
+                    <select id="vp-blur-zone">
+                      <option value="bottom" selected>Duoi</option>
+                      <option value="top">Tren</option>
+                      <option value="none">Khong</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label data-i18n="lbl_tts_voice">Giong doc</label>
+                    <select id="vp-tts-voice">
+                      <option value="vi-VN-HoaiMyNeural">Hoai My (Nu)</option>
+                      <option value="vi-VN-NamMinhNeural">Nam Minh (Nam)</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label data-i18n="lbl_font_size">Co chu phu de</label>
+                    <input type="number" id="vp-font-size" min="10" max="48" value="18">
+                  </div>
+                  <div class="field">
+                    <label data-i18n="lbl_blur_height">Vung mo (%)</label>
+                    <input type="number" id="vp-blur-height" min="5" max="40" value="15">
+                  </div>
+                </div>
+                <div class="alert-info" style="margin-top:8px">
+                  <span data-i18n="lbl_vp_note">Can: pip install openai-whisper edge-tts. Video se duoc xu ly ngay sau khi tai xong.</span>
+                </div>
+              </div>
+            </div>
+            <div class="btn-group">
+              <button class="btn btn-primary" onclick="saveConfig()" data-i18n="btn_save_config">Lưu cấu hình</button>
+              <button class="btn btn-secondary" onclick="loadConfig()" data-i18n="btn_reload">Tải lại</button>
+            </div>
+          </div>
+        </div>
+      </div>

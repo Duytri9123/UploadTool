@@ -1,0 +1,67 @@
+      <!-- PAGE: TRANSCRIBE -->
+      <div id="page-transcribe" class="page">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start">
+          <div>
+            <div class="card">
+              <div class="card-header"><span class="card-title" data-i18n="lbl_tr_settings">Cài đặt phiên âm</span></div>
+              <div class="field"><label data-i18n="lbl_video_folder">Thư mục video</label><input type="text" id="tr-dir" placeholder="./Downloaded" value="./Downloaded"></div>
+              <div class="field"><label data-i18n="lbl_single_file">File đơn (tùy chọn)</label><input type="text" id="tr-file" placeholder="/path/to/video.mp4"></div>
+              <div class="field"><label data-i18n="lbl_output_dir">Thư mục xuất (tùy chọn)</label><input type="text" id="tr-out" placeholder="Leave empty = same as video"></div>
+              <div class="grid-2">
+                <div class="field">
+                  <label data-i18n="lbl_model">Mô hình Whisper</label>
+                  <select id="tr-model">
+                    <option value="tiny">tiny (nhanh nhất)</option>
+                    <option value="base" selected>base</option>
+                    <option value="small">small</option>
+                    <option value="medium">medium</option>
+                    <option value="large">large (tốt nhất)</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label data-i18n="lbl_language">Ngôn ngữ</label>
+                  <select id="tr-lang">
+                    <option value="zh" selected>Tiếng Trung</option>
+                    <option value="vi">Tiếng Việt</option>
+                    <option value="en">Tiếng Anh</option>
+                    <option value="ja">Tiếng Nhật</option>
+                    <option value="ko">Tiếng Hàn</option>
+                  </select>
+                </div>
+              </div>
+              <div class="check-grid mt-8">
+                <label class="check-item"><input type="checkbox" id="tr-srt"><span data-i18n="lbl_export_srt">Xuất SRT</span></label>
+                <label class="check-item"><input type="checkbox" id="tr-skip" checked><span data-i18n="lbl_skip_existing">Bỏ qua đã có</span></label>
+                <label class="check-item"><input type="checkbox" id="tr-sc"><span data-i18n="lbl_simplified">Chữ giản thể</span></label>
+              </div>
+              <div class="btn-group mt-12">
+                <button class="btn btn-primary" id="btn-tr" onclick="startTranscribe()" data-i18n="btn_start_tr">Bắt đầu phiên âm</button>
+              </div>
+            </div>
+          </div>
+          <div>
+            <div class="card">
+              <div class="card-header"><span class="card-title" data-i18n="lbl_progress">Tiến trình</span></div>
+              <div class="progress-row">
+                <span class="progress-label" data-i18n="lbl_overall">Tổng thể</span>
+                <div class="progress-bar-wrap"><div class="progress-bar pb-overall" id="pb-tr-overall"></div></div>
+                <span class="progress-pct" id="pb-tr-overall-pct">0%</span>
+              </div>
+              <div class="progress-info text-muted" id="lbl-tr-overall">--</div>
+              <div class="progress-row mt-8">
+                <span class="progress-label" data-i18n="lbl_step">Bước</span>
+                <div class="progress-bar-wrap"><div class="progress-bar pb-step" id="pb-tr-file"></div></div>
+                <span class="progress-pct" id="pb-tr-file-pct">0%</span>
+              </div>
+              <div class="progress-info text-muted" id="lbl-tr-file">--</div>
+            </div>
+            <div class="card">
+              <div class="card-header">
+                <span class="card-title" data-i18n="lbl_log">Nhật ký</span>
+                <div class="card-actions"><button class="btn btn-secondary btn-sm" onclick="clearLog('tr-log')" data-i18n="btn_clear_log">Xóa</button></div>
+              </div>
+              <div class="log-box" id="tr-log"></div>
+            </div>
+          </div>
+        </div>
+      </div>

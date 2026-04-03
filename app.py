@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Douyin Downloader — Flask Web UI"""
-import asyncio, sys, threading, json, logging
+import asyncio, sys, time, threading, json, logging
 from pathlib import Path
 from datetime import datetime
 import yaml
@@ -211,33 +211,40 @@ class SocketProgress:
         self._log(f"{'─'*44}", "result")
 
 # ── Routes ────────────────────────────────────────────────────────────────────
+def _render_spa(active_tab="user"):
+    return render_template("spa.html", active=active_tab, jsv=int(time.time()))
+
 @app.route("/")
 def index():
-    return render_template("pages/config.html", active="config")
+    return _render_spa("user")
 
 @app.route("/config")
 def page_config():
-    return render_template("pages/config.html", active="config")
+    return _render_spa("config")
 
 @app.route("/cookies")
 def page_cookies():
-    return render_template("pages/cookies.html", active="cookies")
+    return _render_spa("cookies")
 
 @app.route("/download")
 def page_download():
-    return render_template("pages/download.html", active="download")
+    return _render_spa("download")
 
 @app.route("/user")
 def page_user():
-    return render_template("pages/user.html", active="user")
+    return _render_spa("user")
 
 @app.route("/transcribe")
 def page_transcribe():
-    return render_template("pages/transcribe.html", active="transcribe")
+    return _render_spa("transcribe")
 
 @app.route("/history")
 def page_history():
-    return render_template("pages/history.html", active="history")
+    return _render_spa("history")
+
+@app.route("/process")
+def page_process():
+    return _render_spa("process")
 
 @app.route("/api/config", methods=["GET"])
 def get_config():
@@ -609,6 +616,8 @@ def handle_download(data):
                 try:
                     for i, url in enumerate(urls, 1):
                         prog.start_url(i, len(urls), url); orig = url
+                        # Notify frontend which URL is currently downloading
+                        socketio.emit("downloading_url", {"url": orig, "index": i, "total": len(urls)}, to=sid)
                         try:
                             fm = FileManager(config.get("path"))
                             rl = RateLimiter(max_per_second=float(config.get("rate_limit",2) or 2))
@@ -661,6 +670,56 @@ def handle_download(data):
             _dl_running = False
 
     threading.Thread(target=run, daemon=True).start()
+
+
+
+@app.route("/api/translate_batch", methods=["POST"])
+def api_translate_batch():
+    """Translate multiple texts in one request to save tokens."""
+    data = request.json or {}
+    texts = data.get("texts") or []
+    provider = data.get("provider", "auto")
+    if not texts:
+        return jsonify({"results": [], "provider": "none"})
+    cfg = load_cfg()
+    trans_cfg = cfg.get("translation") or {}
+    try:
+        from utils.translation import translate_texts
+        results, used = translate_texts(texts, trans_cfg, provider)
+        return jsonify({"results": results, "provider": used})
+    except Exception as e:
+        return jsonify({"results": texts, "provider": "error", "error": str(e)})
+
+@app.route("/api/translate", methods=["POST"])
+def api_translate():
+    data = request.json or {}
+    text = (data.get("text") or "").strip()
+    provider = data.get("provider", "auto")
+    if not text:
+        return jsonify({"result": "", "provider": "none"})
+    cfg = load_cfg()
+    trans_cfg = cfg.get("translation") or {}
+    try:
+        from utils.translation import translate_texts
+        results, used = translate_texts([text], trans_cfg, provider)
+        return jsonify({"result": results[0] if results else text, "provider": used})
+    except Exception as e:
+        return jsonify({"result": text, "provider": "error", "error": str(e)})
+
+@app.route("/api/translation_status", methods=["GET"])
+def translation_status():
+    cfg = load_cfg()
+    trans_cfg = cfg.get("translation") or {}
+    from utils.translation import get_translation_providers
+    providers = get_translation_providers(trans_cfg)
+    preferred = trans_cfg.get("preferred_provider", "auto")
+    return jsonify({
+        "providers": providers,
+        "preferred": preferred,
+        "has_deepseek": bool(trans_cfg.get("deepseek_key")),
+        "has_openai": bool(trans_cfg.get("openai_key")),
+        "has_hf": bool(trans_cfg.get("hf_token")),
+    })
 
 @app.route("/api/transcribe", methods=["POST"])
 def transcribe():
