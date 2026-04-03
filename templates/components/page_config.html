@@ -43,10 +43,10 @@
             <div class="card">
               <div class="card-header"><span class="card-title" data-i18n="lbl_options">Tùy chọn</span></div>
               <div class="check-grid">
-                <label class="check-item"><input type="checkbox" id="opt-music" checked><span data-i18n="lbl_music">Nhạc</span></label>
-                <label class="check-item"><input type="checkbox" id="opt-cover" checked><span data-i18n="lbl_cover">Ảnh bìa</span></label>
-                <label class="check-item"><input type="checkbox" id="opt-json" checked><span>JSON</span></label>
-                <label class="check-item"><input type="checkbox" id="opt-folder" checked><span data-i18n="lbl_folder">Thư mục</span></label>
+                <label class="check-item"><input type="checkbox" id="opt-music"><span data-i18n="lbl_music">Nhạc</span></label>
+                <label class="check-item"><input type="checkbox" id="opt-cover"><span data-i18n="lbl_cover">Ảnh bìa</span></label>
+                <label class="check-item"><input type="checkbox" id="opt-json"><span>JSON</span></label>
+                <label class="check-item"><input type="checkbox" id="opt-folder"><span data-i18n="lbl_folder">Thư mục</span></label>
               </div>
             </div>
             <div class="card">
@@ -74,7 +74,7 @@
                 <span class="card-title" data-i18n="lbl_vp_title">Xu ly video sau khi tai</span>
                 <div class="card-actions">
                   <label class="toggle-wrap">
-                    <input type="checkbox" class="toggle-input" id="vp-enabled">
+                    <input type="checkbox" class="toggle-input" id="vp-enabled" checked>
                     <div class="toggle"></div>
                     <span class="toggle-label text-sm" data-i18n="lbl_enable">Bat</span>
                   </label>
@@ -86,8 +86,8 @@
                     <label data-i18n="lbl_model">Mo hinh Whisper</label>
                     <select id="vp-model">
                       <option value="tiny">tiny</option>
-                      <option value="base" selected>base</option>
-                      <option value="small">small</option>
+                      <option value="base">base</option>
+                      <option value="small" selected>small</option>
                       <option value="medium">medium</option>
                       <option value="large">large</option>
                     </select>
@@ -103,12 +103,12 @@
                   </div>
                 </div>
                 <div class="check-grid mb-12">
-                  <label class="check-item"><input type="checkbox" id="vp-burn" checked><span data-i18n="lbl_burn_subs">Burn phu de</span></label>
-                  <label class="check-item"><input type="checkbox" id="vp-blur" checked><span data-i18n="lbl_blur_original">Lam mo text goc</span></label>
+                  <label class="check-item"><input type="checkbox" id="vp-burn"><span data-i18n="lbl_burn_subs">Burn phu de</span></label>
+                  <label class="check-item"><input type="checkbox" id="vp-blur"><span data-i18n="lbl_blur_original">Lam mo text goc</span></label>
                   <label class="check-item"><input type="checkbox" id="vp-translate" checked><span data-i18n="lbl_translate_subs">Dich sang VI</span></label>
-                  <label class="check-item"><input type="checkbox" id="vp-burn-vi" checked><span data-i18n="lbl_burn_vi_subs">Burn phu de VI</span></label>
-                  <label class="check-item"><input type="checkbox" id="vp-voice"><span data-i18n="lbl_voice_convert">Doi giong VI</span></label>
-                  <label class="check-item"><input type="checkbox" id="vp-keep-bg" checked><span data-i18n="lbl_keep_bg">Giu nhac nen</span></label>
+                  <label class="check-item"><input type="checkbox" id="vp-burn-vi"><span data-i18n="lbl_burn_vi_subs">Burn phu de VI</span></label>
+                  <label class="check-item"><input type="checkbox" id="vp-voice" checked><span data-i18n="lbl_voice_convert">Doi giong VI</span></label>
+                  <label class="check-item"><input type="checkbox" id="vp-keep-bg"><span data-i18n="lbl_keep_bg">Giu nhac nen</span></label>
                 </div>
                 <div class="grid-2">
                   <div class="field">

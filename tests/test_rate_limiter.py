@@ -19,7 +19,7 @@ async def test_rate_limiter_enforces_interval():
 @pytest.mark.asyncio
 async def test_rate_limiter_invalid_value_uses_default():
     limiter = RateLimiter(max_per_second=0)
-    assert limiter.max_per_second == 2
+    assert limiter.max_per_second == 5
 
     limiter_neg = RateLimiter(max_per_second=-5)
-    assert limiter_neg.max_per_second == 2
+    assert limiter_neg.max_per_second == 5

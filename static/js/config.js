@@ -29,10 +29,10 @@ async function loadConfig() {
   });
 
   // Options
-  setChk('opt-music', cfg.music !== false);
-  setChk('opt-cover', cfg.cover !== false);
-  setChk('opt-json', cfg.json !== false);
-  setChk('opt-folder', cfg.folder !== false);
+  setChk('opt-music', cfg.music === true);
+  setChk('opt-cover', cfg.cover === true);
+  setChk('opt-json', cfg.json === true);
+  setChk('opt-folder', cfg.folderstyle === true || cfg.folder === true);
 
   // Translation — keys nằm trong cfg.translation.*
   const tr = cfg.translation || {};
@@ -42,15 +42,15 @@ async function loadConfig() {
   set('cfg-hf-token', tr.hf_token || '');
 
   // Video processing
-  setChk('vp-enabled', cfg.video_process?.enabled);
+  setChk('vp-enabled', cfg.video_process?.enabled !== false);
   set('vp-model', cfg.video_process?.model || 'base');
   set('vp-lang', cfg.video_process?.language || 'zh');
   setChk('vp-burn', cfg.video_process?.burn_subs !== false);
-  setChk('vp-blur', cfg.video_process?.blur_original !== false);
+  setChk('vp-blur', cfg.video_process?.blur_original === true);
   setChk('vp-translate', cfg.video_process?.translate !== false);
   setChk('vp-burn-vi', cfg.video_process?.burn_vi_subs !== false);
-  setChk('vp-voice', cfg.video_process?.voice_convert);
-  setChk('vp-keep-bg', cfg.video_process?.keep_bg !== false);
+  setChk('vp-voice', cfg.video_process?.voice_convert !== false);
+  setChk('vp-keep-bg', cfg.video_process?.keep_bg_music === true || cfg.video_process?.keep_bg === true);
   set('vp-blur-zone', cfg.video_process?.blur_zone || 'bottom');
   set('vp-tts-voice', cfg.video_process?.tts_voice || 'vi-VN-HoaiMyNeural');
   set('vp-font-size', cfg.video_process?.font_size ?? 18);
@@ -101,6 +101,7 @@ async function saveConfig() {
       translate: getChk('vp-translate'),
       burn_vi_subs: getChk('vp-burn-vi'),
       voice_convert: getChk('vp-voice'),
+      keep_bg_music: getChk('vp-keep-bg'),
       keep_bg: getChk('vp-keep-bg'),
       blur_zone: get('vp-blur-zone'),
       tts_voice: get('vp-tts-voice'),

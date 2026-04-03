@@ -38,7 +38,7 @@ async def download_url(
     if progress_reporter:
         progress_reporter.advance_step("初始化", "创建下载组件")
     file_manager = FileManager(config.get('path'))
-    rate_limiter = RateLimiter(max_per_second=float(config.get('rate_limit', 2) or 2))
+    rate_limiter = RateLimiter(max_per_second=float(config.get('rate_limit', 5) or 5))
     retry_handler = RetryHandler(max_retries=config.get('retry_times', 3))
     queue_manager = QueueManager(max_workers=int(config.get('thread', 5) or 5))
 

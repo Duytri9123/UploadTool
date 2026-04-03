@@ -3,15 +3,15 @@ link:
 
 path: ./Downloaded/
 
-music: true
-cover: true
-avatar: true
-json: true
+music: false
+cover: false
+avatar: false
+json: false
 
 start_time: ""
 end_time: ""
 
-folderstyle: true
+folderstyle: false
 
 mode:
   - post
@@ -33,6 +33,7 @@ increase:
   music: false
 
 thread: 5
+rate_limit: 5
 retry_times: 3
 proxy: ""
 database: true
@@ -58,6 +59,24 @@ browser_fallback:
   max_scrolls: 240
   idle_rounds: 8
   wait_timeout_seconds: 600
+
+video_process:
+  enabled: true
+  model: small
+  language: zh
+  burn_subs: false
+  blur_original: false
+  translate: true
+  burn_vi_subs: false
+  voice_convert: true
+  keep_bg_music: false
+  keep_bg: false
+  blur_zone: bottom
+  tts_voice: vi-VN-HoaiMyNeural
+  tts_engine: edge-tts
+  bg_volume: 0.15
+  font_size: 18
+  blur_height: 15
 
 cookies:
   msToken: YOUR_MS_TOKEN
