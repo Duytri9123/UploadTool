@@ -11,3 +11,4 @@ os.chdir(project_root)
 if __name__ == '__main__':
     from cli.main import main
     main()
+

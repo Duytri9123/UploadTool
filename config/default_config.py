@@ -52,4 +52,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "idle_rounds": 8,
         "wait_timeout_seconds": 600,
     },
+    "translation": {
+        "deepseek_key": "",
+        "openai_key": "",
+        "hf_token": "",
+        "preferred_provider": "auto",
+        "naming_enabled": False,
+    },
 }

@@ -13,6 +13,7 @@ from core.api_client import DouyinAPIClient
 from core.transcript_manager import TranscriptManager
 from storage import Database, FileManager, MetadataHandler
 from utils.logger import setup_logger
+from utils.translation import translate_texts
 from utils.validators import sanitize_filename
 
 logger = setup_logger("BaseDownloader")
@@ -82,6 +83,7 @@ class BaseDownloader(ABC):
         # 控制终端错误日志量，避免进度条被大量日志打断后出现重复重绘。
         self._download_error_log_count = 0
         self._download_error_log_limit = 5
+        self._translated_title_cache: Dict[str, str] = {}
 
     def _progress_update_step(self, step: str, detail: str = "") -> None:
         if not self.progress_reporter:
@@ -243,7 +245,8 @@ class BaseDownloader(ABC):
             logger.error("Missing aweme_id in aweme data")
             return False
 
-        desc = (aweme_data.get("desc", "no_title") or "").strip() or "no_title"
+        desc_raw = (aweme_data.get("desc", "no_title") or "").strip() or "no_title"
+        desc = self._resolve_naming_title(desc_raw)
         publish_ts, publish_date = self._resolve_publish_time(
             aweme_data.get("create_time")
         )
@@ -412,7 +415,8 @@ class BaseDownloader(ABC):
             "date": publish_date,
             "aweme_id": aweme_id,
             "author_name": author.get("nickname", author_name),
-            "desc": desc,
+            "desc": desc_raw,
+            "desc_naming": desc,
             "media_type": media_type,
             "tags": self._extract_tags(aweme_data),
             "file_names": [path.name for path in downloaded_files],
@@ -442,9 +446,33 @@ class BaseDownloader(ABC):
                     transcript_result.get("error", "unknown"),
                 )
 
+            # ── Post-download video processing (subtitle burn + voice) ──────
+            vp_cfg = self.config.get("video_process") or {}
+            if vp_cfg.get("enabled") and video_path.exists():
+                await self._run_video_processor(video_path, vp_cfg, aweme_id)
+
         self._mark_local_aweme_downloaded(aweme_id)
         logger.info("Downloaded %s: %s (%s)", media_type, desc, aweme_id)
         return True
+
+    def _resolve_naming_title(self, desc_raw: str) -> str:
+        trans_cfg = self.config.get("translation") or {}
+        if not trans_cfg.get("naming_enabled"):
+            return desc_raw
+
+        normalized = (desc_raw or "").strip() or "no_title"
+        if normalized in self._translated_title_cache:
+            return self._translated_title_cache[normalized]
+
+        preferred_provider = trans_cfg.get("preferred_provider", "auto")
+        translated, used_provider = translate_texts([normalized], trans_cfg, preferred_provider)
+        translated_title = (translated[0] if translated else "").strip() or normalized
+        self._translated_title_cache[normalized] = translated_title
+
+        if translated_title != normalized:
+            logger.info("Translated naming title via %s", used_provider)
+
+        return translated_title
 
     async def _download_with_retry(
         self,
@@ -702,3 +730,124 @@ class BaseDownloader(ABC):
             return str(path.relative_to(self.file_manager.base_path))
         except ValueError:
             return str(path)
+
+    async def _run_video_processor(
+        self, video_path: Path, vp_cfg: dict, aweme_id: str
+    ) -> None:
+        """Run post-download video processing: burn subtitles + optional voice conversion."""
+        import asyncio as _asyncio
+        from core.video_processor import (
+            find_ffmpeg, transcribe_to_srt, burn_subtitles, convert_voice
+        )
+
+        ffmpeg = find_ffmpeg()
+        if not ffmpeg:
+            logger.warning("video_process: ffmpeg not found, skipping for %s", aweme_id)
+            return
+
+        try:
+            import whisper  # noqa: F401
+        except ImportError:
+            logger.warning("video_process: openai-whisper not installed, skipping for %s", aweme_id)
+            return
+
+        logger.info("video_process: starting for %s", aweme_id)
+        out_dir = video_path.parent
+        stem = video_path.stem
+
+        # Step 1: Transcribe → SRT
+        try:
+            srt_path, segments = transcribe_to_srt(
+                video_path=video_path,
+                ffmpeg=ffmpeg,
+                model_name=vp_cfg.get("whisper_model", "base"),
+                language=vp_cfg.get("language", "zh"),
+                out_srt=out_dir / f"{stem}.srt",
+            )
+        except Exception as e:
+            logger.warning("video_process: transcription failed for %s: %s", aweme_id, e)
+            return
+
+        if not segments:
+            logger.info("video_process: no speech detected for %s", aweme_id)
+            return
+
+        logger.info("video_process: transcribed %d segments for %s", len(segments), aweme_id)
+
+        # Step 2: Translate ZH → VI if needed
+        translated_texts: list = []
+        if vp_cfg.get("translate_subs") or vp_cfg.get("voice_convert"):
+            try:
+                from utils.translation import translate_texts
+                trans_cfg = self.config.get("translation") or {}
+                provider = trans_cfg.get("preferred_provider", "auto")
+                texts = [seg.get("text", "").strip() for seg in segments]
+                translated_texts, used = translate_texts(texts, trans_cfg, provider)
+                logger.info("video_process: translated %d segments via %s", len(translated_texts), used)
+
+                # Write VI SRT
+                if translated_texts and vp_cfg.get("translate_subs"):
+                    from core.video_processor import _fmt_srt_time
+                    vi_srt_path = out_dir / f"{stem}_vi.srt"
+                    vi_lines = []
+                    for i, (seg, vi_text) in enumerate(zip(segments, translated_texts), 1):
+                        if vi_text and vi_text.strip():
+                            vi_lines.append(
+                                f"{i}\n{_fmt_srt_time(seg['start'])} --> {_fmt_srt_time(seg['end'])}\n{vi_text}\n"
+                            )
+                    vi_srt_path.write_text("\n".join(vi_lines), encoding="utf-8")
+                    if vp_cfg.get("burn_vi_subs"):
+                        srt_path = vi_srt_path
+            except Exception as e:
+                logger.warning("video_process: translation failed for %s: %s", aweme_id, e)
+
+        # Step 3: Burn subtitles + blur original text
+        processed_path = None
+        if vp_cfg.get("burn_subs") and srt_path and srt_path.exists():
+            out_video = out_dir / f"{stem}_processed.mp4"
+            ok, err = burn_subtitles(
+                video_path=video_path,
+                srt_path=srt_path,
+                output_path=out_video,
+                ffmpeg=ffmpeg,
+                blur_original=vp_cfg.get("blur_original", True),
+                blur_zone=vp_cfg.get("blur_zone", "bottom"),
+                blur_height_pct=float(vp_cfg.get("blur_height_pct", 15)) / 100,
+                font_size=int(vp_cfg.get("font_size", 18)),
+                font_color=vp_cfg.get("font_color", "white"),
+                outline_color=vp_cfg.get("outline_color", "black"),
+                outline_width=int(vp_cfg.get("outline_width", 2)),
+                margin_v=int(vp_cfg.get("margin_v", 30)),
+            )
+            if ok:
+                processed_path = out_video
+                logger.info("video_process: subtitles burned → %s", out_video.name)
+            else:
+                logger.warning("video_process: subtitle burn failed for %s: %s", aweme_id, err)
+
+        # Step 4: Voice conversion ZH → VI
+        if vp_cfg.get("voice_convert") and translated_texts and segments:
+            source = processed_path if processed_path else video_path
+            voice_out = out_dir / f"{stem}_vi_voice.mp4"
+            try:
+                ok, err = _asyncio.get_event_loop().run_until_complete(
+                    convert_voice(
+                        video_path=source,
+                        segments=segments,
+                        translated_texts=translated_texts,
+                        output_path=voice_out,
+                        ffmpeg=ffmpeg,
+                        tts_voice=vp_cfg.get("tts_voice", "vi-VN-HoaiMyNeural"),
+                        tts_engine=vp_cfg.get("tts_engine", "edge-tts"),
+                        keep_bg_music=vp_cfg.get("keep_bg_music", True),
+                        bg_volume=float(vp_cfg.get("bg_volume", 0.15)),
+                    )
+                )
+                if ok:
+                    logger.info("video_process: voice converted → %s", voice_out.name)
+                else:
+                    logger.warning("video_process: voice conversion failed for %s: %s", aweme_id, err)
+            except Exception as e:
+                logger.warning("video_process: voice conversion error for %s: %s", aweme_id, e)
+
+        logger.info("video_process: done for %s", aweme_id)
