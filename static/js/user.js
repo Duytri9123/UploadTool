@@ -6,8 +6,6 @@ let _viEnabled = true;
 let _viCache = {};
 let _translationScopeUrl = '';
 let _translationProvider = 'auto';
-let _prefetchRunning = false;
-let _prefetchPromise = null;
 let _profileTranslationCache = {};
 
 const _PROFILE_CACHE_PREFIX = 'douyin.userProfileTranslations.v1';
@@ -173,30 +171,8 @@ async function _appendMoreVideos(cursor, count, renderCurrent = false) {
   return res;
 }
 
-async function _prefetchRemainingVideos() {
-  if (_prefetchRunning) return _prefetchPromise;
-  _prefetchRunning = true;
-  _prefetchPromise = (async () => {
-    try {
-      while (_userHasMore) {
-        const currentCursor = _userNextCursor;
-        const res = await _appendMoreVideos(currentCursor, 20, false);
-        if (!res || !res.has_more) break;
-        if (!res.next_cursor || res.next_cursor === currentCursor) break;
-      }
-    } catch (e) {
-      // Silent background prefetch; visible page already has data.
-    } finally {
-      _prefetchRunning = false;
-    }
-  })();
-  return _prefetchPromise;
-}
-
 async function _ensurePageLoaded(pageNumber) {
   const required = pageNumber * _userPageSize;
-  if (_userVideos.length >= required || !_userHasMore) return;
-  await _prefetchRemainingVideos();
   if (_userVideos.length >= required || !_userHasMore) return;
   while (_userHasMore && _userVideos.length < required) {
     const currentCursor = _userNextCursor;
@@ -245,14 +221,15 @@ function _renderVideos() {
     const sel = _selectedIds.has(v.aweme_id);
     const desc = (v.desc || '');
     const descVi = (_viEnabled && v.desc_vi) ? v.desc_vi : '';
-    // eager load first 8 items, lazy the rest
-    const loadAttr = idx < 8 ? 'eager' : 'lazy';
+    const durTxt = fmtDur(v.duration);
+    const durationLabel = v.type === 'video' ? (durTxt || '--:--') : '';
+    const loadAttr = 'eager';
     return '<div class="vcard' + (sel ? ' selected' : '') + '" onclick="toggleSelect(\'' + v.aweme_id + '\')">' +
       '<div class="vcard-thumb">' +
         (thumb ? '<img src="' + thumb + '" loading="' + loadAttr + '">' : '<div class="vcard-thumb-ph">&#127916;</div>') +
         '<div class="vcard-check">' + (sel ? '&#10003;' : '') + '</div>' +
         (v.type === 'gallery' ? '<span class="vcard-type badge-gallery">&#128247;</span>' : '') +
-        (v.duration ? '<span class="vcard-dur">' + fmtDur(v.duration) + '</span>' : '') +
+        (durationLabel ? '<span class="vcard-dur">' + durationLabel + '</span>' : '') +
       '</div>' +
       '<div class="vcard-meta">' +
         '<div class="vcard-desc">' + escHtml(desc) + '</div>' +
@@ -260,6 +237,7 @@ function _renderVideos() {
         '<div class="vcard-stats">' +
           '<span>&#9654; ' + fmtNum(v.play) + '</span>' +
           '<span>&#10084; ' + fmtNum(v.like) + '</span>' +
+          (durationLabel ? '<span>&#9201; ' + durationLabel + '</span>' : '') +
         '</div>' +
         '<div class="vcard-date">' + (v.date || '') + '</div>' +
       '</div>' +
@@ -307,8 +285,10 @@ async function downloadSelected() {
   const selected = _userVideos.filter(v => _selectedIds.has(v.aweme_id));
   if (!selected.length) return;
   const items = selected.map(v => ({ url: 'https://www.douyin.com/video/' + v.aweme_id, desc: v.desc, cover: v.cover, date: v.date }));
-  await API.post('/api/queue/add', items);
-  toast(t('toast_added_queue') + ' (' + items.length + ')', 'success');
+  const res = await API.post('/api/queue/add', items);
+  if (res?.added > 0) toast(t('toast_added_queue') + ' (' + res.added + ')', 'success');
+  else toast('Khong co video moi duoc them (co the da ton tai)', 'warning');
+  if (typeof loadQueue === 'function') loadQueue();
   _selectedIds.clear();
   _renderVideos();
 }
@@ -414,10 +394,6 @@ async function searchUser() {
     if (statusEl) statusEl.textContent = _userVideos.length + ' video' + (_userHasMore ? ' (còn nữa)' : '');
 
     _renderVideos();
-
-    if (_userHasMore) {
-      _prefetchRemainingVideos();
-    }
 
     _translateUserProfileAsync(info, currentProvider, nameViEl, sigViEl);
 
