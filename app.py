@@ -52,7 +52,13 @@ def get_cookies_with_fallback():
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "douyin-dl-secret"
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    async_mode="threading",
+    ping_timeout=120,       # wait 2 min before declaring client dead
+    ping_interval=30,       # ping every 30s to keep connection alive
+)
 
 _dl_running = False
 _tr_running = False
@@ -477,6 +483,7 @@ def proxy_image():
         return r
     except Exception:
         return "", 404
+@app.route("/api/history", methods=["GET"])
 def get_history():
     cfg = load_cfg()
     db_path = cfg.get("database_path", "dy_downloader.db") or "dy_downloader.db"
@@ -866,9 +873,146 @@ def process_video():
     from flask import Response, stream_with_context
 
     def generate():
+        from config import ConfigLoader
+        from auth import CookieManager
+        from core import DouyinAPIClient, URLParser
+        from core.video_downloader import VideoDownloader
+        from control import QueueManager, RateLimiter, RetryHandler
+        from storage import FileManager
         from core.video_processor import process_video_full
+
+        async def _download_video_from_url(video_url: str, out_dir: str) -> Path:
+            import re
+            from urllib.parse import urlparse, parse_qs
+
+            def _pick_url(raw: str) -> str:
+                text = str(raw or "").strip()
+                if not text:
+                    return ""
+                m = re.search(r"https?://[^\s]+", text)
+                if m:
+                    return m.group(0).rstrip("\"'.,;)")
+                if text.startswith("v.douyin.com/") or text.startswith("www.douyin.com/"):
+                    return "https://" + text
+                return text
+
+            def _extract_aweme_id(url: str, parsed_url: dict | None) -> str:
+                if parsed_url:
+                    return str(parsed_url.get("aweme_id") or "").strip()
+                qs = parse_qs(urlparse(url).query)
+                for key in ("modal_id", "item_id", "group_id", "aweme_id"):
+                    val = (qs.get(key) or [""])[0]
+                    if val.isdigit():
+                        return val
+                m = re.search(r"/(?:video|note|gallery|slides|share/video)/(\d{15,20})", url)
+                if m:
+                    return m.group(1)
+                return ""
+
+            cfg = ConfigLoader(str(CONFIG_FILE))
+            cm = CookieManager()
+            cm.set_cookies(get_cookies_with_fallback())
+            if not cm.validate_cookies():
+                raise RuntimeError("Cookies may be invalid")
+
+            async with DouyinAPIClient(cm.get_cookies(), proxy=cfg.get("proxy")) as api:
+                normalized_url = _pick_url(video_url)
+                if not normalized_url:
+                    raise RuntimeError("URL is empty")
+
+                resolved_url = normalized_url
+                if "douyin.com" in resolved_url:
+                    redirected = await api.resolve_short_url(resolved_url)
+                    if redirected:
+                        resolved_url = redirected
+
+                parsed = URLParser.parse(resolved_url)
+                aweme_id = _extract_aweme_id(resolved_url, parsed)
+                if not aweme_id:
+                    # Some redirects (e.g. jingxuan) may drop query parameters like modal_id.
+                    # Fallback to the original input URL to keep video id extraction robust.
+                    aweme_id = _extract_aweme_id(normalized_url, URLParser.parse(normalized_url))
+                if not aweme_id:
+                    raise RuntimeError(
+                        "Invalid video URL. Please paste a specific Douyin post link (e.g. /video/{id} or shared short link), not homepage."
+                    )
+
+                if parsed and parsed.get("type") not in ("video", "gallery") and not aweme_id:
+                    raise RuntimeError("URL is not a video post")
+
+                aweme_data = await api.get_video_detail(aweme_id)
+                if not aweme_data:
+                    raise RuntimeError("Failed to fetch video detail")
+
+                out_path = Path(out_dir).expanduser() if out_dir else Path(cfg.get("path") or "./Downloaded")
+                file_manager = FileManager(str(out_path))
+                downloader = VideoDownloader(
+                    config=cfg,
+                    api_client=api,
+                    file_manager=file_manager,
+                    cookie_manager=cm,
+                    database=None,
+                    rate_limiter=RateLimiter(max_per_second=float(cfg.get("rate_limit", 5) or 5)),
+                    retry_handler=RetryHandler(max_retries=int(cfg.get("retry_times", 3) or 3)),
+                    queue_manager=QueueManager(max_workers=1),
+                    progress_reporter=None,
+                )
+
+                if downloader._detect_media_type(aweme_data) != "video":
+                    raise RuntimeError("URL is not a video post")
+
+                play_info = downloader._build_no_watermark_url(aweme_data)
+                if not play_info:
+                    raise RuntimeError("No playable video URL found")
+
+                play_url, headers = play_info
+                from utils.validators import sanitize_filename
+
+                desc = (aweme_data.get("desc") or "").strip() or "video"
+                base_name = sanitize_filename(f"{desc}_{aweme_id}")
+                save_dir = out_path
+                save_dir.mkdir(parents=True, exist_ok=True)
+                save_path = save_dir / f"{base_name}.mp4"
+
+                if save_path.exists():
+                    save_path = save_dir / f"{base_name}_{int(time.time())}.mp4"
+
+                session = await api.get_session()
+                ok = await file_manager.download_file(
+                    play_url,
+                    save_path,
+                    session,
+                    headers=headers,
+                    proxy=api.proxy,
+                )
+                if not ok or not save_path.exists():
+                    raise RuntimeError("Download failed")
+
+                return save_path.resolve()
+
         try:
-            for line in process_video_full(data):
+            req = dict(data or {})
+            video_path = str(req.get("video_path") or "").strip()
+            video_url = str(req.get("video_url") or "").strip()
+
+            if not video_path and video_url:
+                yield _j.dumps({"log": f"Resolving URL: {video_url}", "level": "info"}, ensure_ascii=False) + "\n"
+                yield _j.dumps({"overall": 2, "overall_lbl": "Resolving URL..."}, ensure_ascii=False) + "\n"
+                try:
+                    downloaded_path = asyncio.run(_download_video_from_url(video_url, str(req.get("out_dir") or "").strip()))
+                    req["video_path"] = str(downloaded_path)
+                    yield _j.dumps({"log": f"Downloaded video: {downloaded_path}", "level": "success"}, ensure_ascii=False) + "\n"
+                    yield _j.dumps({"overall": 4, "overall_lbl": "Download done, start processing..."}, ensure_ascii=False) + "\n"
+                except Exception as e:
+                    yield _j.dumps({"log": f"URL download failed: {e}", "level": "error"}, ensure_ascii=False) + "\n"
+                    yield _j.dumps({"overall": 0, "overall_lbl": "Error"}, ensure_ascii=False) + "\n"
+                    return
+            elif not video_path:
+                yield _j.dumps({"log": "Please provide video_path or video_url", "level": "error"}, ensure_ascii=False) + "\n"
+                yield _j.dumps({"overall": 0, "overall_lbl": "Error"}, ensure_ascii=False) + "\n"
+                return
+
+            for line in process_video_full(req):
                 yield line
         except Exception as e:
             yield _j.dumps({"log": f"Fatal error: {e}", "level": "error"}, ensure_ascii=False) + "\n"
@@ -890,7 +1034,23 @@ def auto_fetch_cookie():
     threading.Thread(target=run, daemon=True).start()
     return jsonify({"ok": True})
 
+def _preload_whisper_model():
+    """Preload faster-whisper model in background so first video processes faster."""
+    try:
+        import os
+        os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+        cfg = load_cfg()
+        model_name = (cfg.get("video_process") or {}).get("model", "base")
+        from core.video_processor import _whisper_model_cache
+        if model_name not in _whisper_model_cache:
+            from faster_whisper import WhisperModel
+            _whisper_model_cache[model_name] = WhisperModel(model_name, device="cpu", compute_type="int8")
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
     import webbrowser, time
+    threading.Thread(target=_preload_whisper_model, daemon=True).start()
     threading.Timer(1.2, lambda: webbrowser.open("http://localhost:5003")).start()
     socketio.run(app, host="0.0.0.0", port=5003, debug=False)

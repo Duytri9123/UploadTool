@@ -2,6 +2,7 @@ import json
 import re
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Dict, List, Tuple
 
 
@@ -91,9 +92,16 @@ def translate_texts(
     trans_cfg: Dict,
     preferred_provider: str = "auto",
 ) -> Tuple[List[str], str]:
-    source_texts = [t for t in texts if t and str(t).strip()]
-    if not source_texts:
+    if not texts:
         return [], "none"
+
+    # Track which indices have non-empty text to translate
+    active_indices = [i for i, t in enumerate(texts) if t and str(t).strip()]
+    source_texts = [texts[i] for i in active_indices]
+
+    # If all texts are whitespace-only, return originals as fallback
+    if not source_texts:
+        return list(texts), "fallback"
 
     cfg = trans_cfg or {}
     deepseek_key = cfg.get("deepseek_key", "") or ""
@@ -101,6 +109,14 @@ def translate_texts(
     hf_token = cfg.get("hf_token", "") or ""
 
     provider_order = build_provider_order(cfg, preferred_provider)
+
+    def _rebuild(translated_active: List[str]) -> List[str]:
+        """Map translated results back to original indices, preserving whitespace-only entries."""
+        result = list(texts)
+        for i, idx in enumerate(active_indices):
+            if i < len(translated_active):
+                result[idx] = translated_active[i]
+        return result
 
     for provider in provider_order:
         try:
@@ -112,7 +128,7 @@ def translate_texts(
                     "deepseek-chat",
                 )
                 if any(result):
-                    return result, "deepseek"
+                    return _rebuild(result), "deepseek"
 
             if provider == "openai" and openai_key:
                 result = _llm_translate(
@@ -122,7 +138,7 @@ def translate_texts(
                     "gpt-4o-mini",
                 )
                 if any(result):
-                    return result, "openai"
+                    return _rebuild(result), "openai"
 
             if provider == "huggingface" and hf_token:
                 hf_endpoints = [
@@ -146,7 +162,7 @@ def translate_texts(
                 for hf_url, hf_model in hf_endpoints:
                     result = _llm_translate(source_texts, hf_url, hf_token, hf_model)
                     if any(result):
-                        return result, "huggingface"
+                        return _rebuild(result), "huggingface"
 
             if provider == "google":
                 translated = []
@@ -171,8 +187,67 @@ def translate_texts(
                     else:
                         translated.append("".join(p[0] for p in data[0] if p[0]))
                 if any(translated):
-                    return translated, "google"
+                    return _rebuild(translated), "google"
         except Exception:
             continue
 
-    return source_texts, "fallback"
+    return list(texts), "fallback"
+
+
+def _format_srt_time(seconds: float) -> str:
+    """Convert seconds to SRT timestamp format HH:MM:SS,mmm."""
+    total_ms = int(round(seconds * 1000))
+    ms = total_ms % 1000
+    total_s = total_ms // 1000
+    s = total_s % 60
+    total_m = total_s // 60
+    m = total_m % 60
+    h = total_m // 60
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+class BatchTranslator:
+    """Batch translation with multi-provider fallback.
+
+    Fallback chain: DeepSeek → OpenAI → HuggingFace → Google
+    """
+
+    def __init__(self, trans_cfg: dict):
+        self._cfg = trans_cfg or {}
+
+    def translate(
+        self,
+        texts: List[str],
+        preferred_provider: str = "auto",
+    ) -> Tuple[List[str], str]:
+        """Translate a list of texts in a single batch call.
+
+        Returns (translated_texts, provider_used).
+        If all providers fail, returns (original_texts, "fallback").
+        """
+        return translate_texts(texts, self._cfg, preferred_provider)
+
+    def write_vi_srt(
+        self,
+        segments: List[dict],
+        translations: List[str],
+        out_path: Path,
+    ) -> None:
+        """Write a Vietnamese SRT file.
+
+        Args:
+            segments: List of dicts with 'start' and 'end' keys (seconds).
+            translations: Translated text for each segment.
+            out_path: Destination path for the .srt file.
+        """
+        out_path = Path(out_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        lines: List[str] = []
+        for i, (seg, text) in enumerate(zip(segments, translations), start=1):
+            start_ts = _format_srt_time(float(seg.get("start", 0)))
+            end_ts = _format_srt_time(float(seg.get("end", 0)))
+            lines.append(str(i))
+            lines.append(f"{start_ts} --> {end_ts}")
+            lines.append(text or "")
+            lines.append("")
+        out_path.write_text("\n".join(lines), encoding="utf-8")

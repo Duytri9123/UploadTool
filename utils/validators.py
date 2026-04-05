@@ -31,7 +31,13 @@ def parse_url_type(url: str) -> Optional[str]:
     if 'v.douyin.com' in url:
         return 'video'
 
-    path = urlparse(url).path
+    parsed = urlparse(url)
+    path = parsed.path
+    query = parsed.query or ''
+
+    # Some share pages (e.g. /jingxuan) carry the real video id in query params.
+    if any(k in query for k in ('modal_id=', 'item_id=', 'group_id=', 'aweme_id=')):
+        return 'video'
 
     if '/video/' in path:
         return 'video'

@@ -88,6 +88,67 @@ def _parse_srt(srt_path: Path) -> list[dict]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# FasterWhisperTranscriber
+# ══════════════════════════════════════════════════════════════════════════════
+_whisper_model_cache: dict = {}  # {model_name: WhisperModel} — keep in memory
+
+
+class FasterWhisperTranscriber:
+    """Speech-to-text using faster-whisper (~4x faster than openai-whisper on CPU)."""
+
+    def __init__(self, model_name: str, language: str, use_vad: bool = True):
+        self.model_name = model_name
+        self.language = language
+        self.use_vad = use_vad
+        # Reuse cached model to avoid reloading from disk on every call
+        if model_name not in _whisper_model_cache:
+            import os
+            os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+            from faster_whisper import WhisperModel  # lazy import
+            _whisper_model_cache[model_name] = WhisperModel(model_name, device="cpu", compute_type="int8")
+        self._model = _whisper_model_cache[model_name]
+
+    def transcribe(self, video_path: Path, ffmpeg: str, out_srt: Path) -> list[dict]:
+        """
+        Extract audio from video, transcribe with faster-whisper, write SRT.
+        Returns list of {"start": float, "end": float, "text": str} dicts.
+        """
+        video_path = Path(video_path)
+        out_srt = Path(out_srt)
+
+        with tempfile.TemporaryDirectory(prefix="fwhisper_") as tmpdir:
+            audio_path = Path(tmpdir) / "audio.wav"
+            ok, err = run_ffmpeg([
+                ffmpeg, "-i", str(video_path),
+                "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
+                str(audio_path), "-y", "-loglevel", "error"
+            ])
+            if not ok or not audio_path.exists():
+                raise RuntimeError(f"Audio extraction failed: {err}")
+
+            fw_segments, _info = self._model.transcribe(
+                str(audio_path),
+                language=self.language,
+                vad_filter=self.use_vad,
+            )
+            segments = [
+                {"start": seg.start, "end": seg.end, "text": seg.text.strip()}
+                for seg in fw_segments
+                if seg.text.strip()
+            ]
+
+        # write SRT
+        srt_lines = []
+        for i, seg in enumerate(segments, 1):
+            srt_lines.append(
+                f"{i}\n{_fmt_srt_time(seg['start'])} --> {_fmt_srt_time(seg['end'])}\n{seg['text']}\n"
+            )
+        out_srt.write_text("\n".join(srt_lines), encoding="utf-8")
+
+        return segments
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # STEP 1: Whisper transcribe → SRT
 # ══════════════════════════════════════════════════════════════════════════════
 def transcribe_to_srt(
@@ -266,6 +327,72 @@ def _hex_color(name: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# MultiProviderTTS
+# ══════════════════════════════════════════════════════════════════════════════
+class MultiProviderTTS:
+    """Multi-provider TTS with Edge-TTS as primary and gTTS as fallback."""
+
+    def __init__(self, voice: str = "vi-VN-HoaiMyNeural", engine: str = "edge-tts"):
+        self.voice = voice
+        self.engine = engine
+
+    async def generate(self, text: str, out_path: Path) -> bool:
+        """
+        Generate TTS audio for text, writing to out_path.
+        Tries Edge-TTS first, falls back to gTTS.
+        Returns False (without raising) if both providers fail.
+        """
+        out_path = Path(out_path)
+
+        # Try Edge-TTS first
+        try:
+            ok = await _tts_edge(text, self.voice, out_path)
+            if ok:
+                return True
+        except Exception:
+            pass
+
+        # Fallback to gTTS
+        try:
+            ok = _tts_gtts(text, "vi", out_path)
+            if ok:
+                return True
+        except Exception:
+            pass
+
+        return False
+
+    async def generate_all(
+        self,
+        segments: list[dict],
+        translations: list[str],
+        tmpdir: Path,
+    ) -> list[dict]:
+        """
+        Generate TTS for all segments concurrently using asyncio.gather.
+        Returns list of {"path": Path, "start": float, "end": float}
+        only for successfully generated segments.
+        """
+        tmpdir = Path(tmpdir)
+
+        async def _gen_one(i: int, seg: dict, text: str):
+            if not text or not text.strip():
+                return None
+            out_path = tmpdir / f"tts_{i:04d}.mp3"
+            ok = await self.generate(text.strip(), out_path)
+            if ok:
+                return {"path": out_path, "start": seg["start"], "end": seg["end"]}
+            return None
+
+        tasks = [
+            _gen_one(i, seg, text)
+            for i, (seg, text) in enumerate(zip(segments, translations))
+        ]
+        results = await asyncio.gather(*tasks)
+        return [r for r in results if r is not None]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # STEP 3: Voice conversion ZH → VI
 # ══════════════════════════════════════════════════════════════════════════════
 async def _tts_edge(text: str, voice: str, out_path: Path) -> bool:
@@ -430,6 +557,102 @@ async def convert_voice(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# AudioMixer
+# ══════════════════════════════════════════════════════════════════════════════
+class AudioMixer:
+    """Mix TTS audio clips into a video at correct timestamps using ffmpeg."""
+
+    def __init__(self, ffmpeg: str):
+        self.ffmpeg = ffmpeg
+
+    def mix(
+        self,
+        video_path: Path,
+        tts_clips: list[dict],
+        output_path: Path,
+        keep_bg_music: bool,
+        bg_volume: float,
+    ) -> tuple[bool, str]:
+        """
+        Mix TTS clips into video.
+
+        Each clip dict must have: {"path": Path, "start": float, ...}
+        delay_ms = int(clip["start"] * 1000)
+
+        Returns (True, "") on success, (False, error_msg) on failure.
+        """
+        if not tts_clips:
+            return False, "No TTS clips"
+
+        video_path = Path(video_path)
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with tempfile.TemporaryDirectory(prefix="audiomix_") as tmpdir:
+            tmpdir = Path(tmpdir)
+            tmp_video = tmpdir / "input.mp4"
+            shutil.copy2(str(video_path), str(tmp_video))
+
+            # Build inputs list and filter_complex
+            inputs = ["-i", str(tmp_video)]
+            filter_parts = []
+            mix_labels = []
+
+            for j, clip in enumerate(tts_clips):
+                inputs += ["-i", str(clip["path"])]
+                delay_ms = int(clip["start"] * 1000)
+                filter_parts.append(
+                    f"[{j + 1}:a]adelay={delay_ms}|{delay_ms}[d{j}]"
+                )
+                mix_labels.append(f"[d{j}]")
+
+            n_mix = len(mix_labels)
+            filter_parts.append(
+                f"{''.join(mix_labels)}amix=inputs={n_mix}:duration=longest:dropout_transition=0[tts_mix]"
+            )
+
+            if keep_bg_music:
+                orig_audio = tmpdir / "orig_audio.wav"
+                run_ffmpeg([
+                    self.ffmpeg, "-i", str(tmp_video),
+                    "-vn", "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2",
+                    str(orig_audio), "-y", "-loglevel", "error"
+                ])
+                if orig_audio.exists():
+                    bg_idx = len(tts_clips) + 1
+                    inputs += ["-i", str(orig_audio)]
+                    filter_parts.append(
+                        f"[{bg_idx}:a]volume={bg_volume}[bg];"
+                        f"[tts_mix][bg]amix=inputs=2:duration=first:dropout_transition=0[final_audio]"
+                    )
+                    final_label = "[final_audio]"
+                else:
+                    final_label = "[tts_mix]"
+            else:
+                final_label = "[tts_mix]"
+
+            filter_complex = ";".join(filter_parts)
+
+            # video input is always the last -i (tmp_video is inputs[1] at index 0)
+            # We re-add tmp_video as the video source at the end for clean mapping
+            video_input_idx = 0  # tmp_video is the first input
+
+            cmd = [self.ffmpeg] + inputs + [
+                "-filter_complex", filter_complex,
+                "-map", f"{video_input_idx}:v",
+                "-map", final_label,
+                "-c:v", "copy",
+                "-c:a", "aac", "-b:a", "128k",
+                str(output_path), "-y", "-loglevel", "error"
+            ]
+            ok, err = run_ffmpeg(cmd, "audio mix")
+            if not ok:
+                return False, f"ffmpeg mix failed: {err}"
+
+        return True, ""
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Main pipeline: process_video_full
 # ══════════════════════════════════════════════════════════════════════════════
 def process_video_full(data: dict) -> Generator[str, None, None]:
@@ -469,25 +692,49 @@ def process_video_full(data: dict) -> Generator[str, None, None]:
     model_name = data.get("model", "base")
     language = data.get("language", "zh")
 
-    yield send(log=f"Processing: {video_path.name}", level="url")
+    yield send(log=f"Processing: {video_path.name}", level="info")
     yield send(overall=5, overall_lbl="Starting...")
 
     # ── Step 1: Transcribe ────────────────────────────────────────────────────
-    yield send(log=f"Loading Whisper model: {model_name}...", level="info")
+    yield send(log=f"Loading faster-whisper model: {model_name}...", level="info")
     yield send(overall=10, overall_lbl="Loading model...")
 
     srt_path = out_dir / f"{stem}.srt"
     segments = []
 
     try:
-        srt_path, segments = transcribe_to_srt(
-            video_path, ffmpeg, model_name, language, srt_path
-        )
+        # Load model in a thread so we can yield heartbeats while waiting
+        import threading as _threading
+        _transcriber_box = [None]
+        _transcriber_err = [None]
+        def _load_transcriber():
+            try:
+                _transcriber_box[0] = FasterWhisperTranscriber(model_name, language, use_vad=True)
+            except Exception as e:
+                _transcriber_err[0] = e
+        t = _threading.Thread(target=_load_transcriber, daemon=True)
+        t.start()
+        _waited = 0
+        while t.is_alive():
+            import time as _time
+            _time.sleep(2)
+            _waited += 2
+            yield send(log=f"Loading model... ({_waited}s)", level="info")
+        t.join()
+        if _transcriber_err[0]:
+            raise _transcriber_err[0]
+        transcriber = _transcriber_box[0]
+        yield send(log="Model loaded, transcribing...", level="info")
+
+        segments = transcriber.transcribe(video_path, ffmpeg, srt_path)
         if not segments:
             yield send(log="No speech detected in video", level="warning")
             return
         yield send(log=f"Transcribed {len(segments)} segments → {srt_path.name}", level="success")
         yield send(overall=35, overall_lbl=f"Transcribed {len(segments)} segments")
+    except RuntimeError as e:
+        yield send(log=f"Transcription failed: {e}", level="error")
+        return
     except Exception as e:
         yield send(log=f"Transcription failed: {e}", level="error")
         return
@@ -498,30 +745,22 @@ def process_video_full(data: dict) -> Generator[str, None, None]:
         yield send(log="Translating to Vietnamese...", level="info")
         yield send(overall=45, overall_lbl="Translating...")
         try:
-            from utils.translation import translate_texts
+            from utils.translation import BatchTranslator
             import yaml
-            from pathlib import Path as P
-            cfg_file = P(__file__).parent.parent / "config.yml"
+            cfg_file = Path(__file__).parent.parent / "config.yml"
             cfg_raw = yaml.safe_load(cfg_file.read_text(encoding="utf-8")) if cfg_file.exists() else {}
             trans_cfg = cfg_raw.get("translation", {})
             provider = data.get("translate_provider", "auto")
             texts = [seg.get("text", "").strip() for seg in segments]
-            translated_texts, used = translate_texts(texts, trans_cfg, provider)
+            translator = BatchTranslator(trans_cfg)
+            translated_texts, used = translator.translate(texts, provider)
             yield send(log=f"Translated {len(translated_texts)} segments (provider: {used})", level="success")
             yield send(overall=55, overall_lbl="Translation done")
 
-            # Always write VI SRT
             if translated_texts:
                 vi_srt_path = out_dir / f"{stem}_vi.srt"
-                vi_lines = []
-                for i, (seg, vi_text) in enumerate(zip(segments, translated_texts), 1):
-                    if vi_text and vi_text.strip():
-                        vi_lines.append(
-                            f"{i}\n{_fmt_srt_time(seg['start'])} --> {_fmt_srt_time(seg['end'])}\n{vi_text}\n"
-                        )
-                vi_srt_path.write_text("\n".join(vi_lines), encoding="utf-8")
+                translator.write_vi_srt(segments, translated_texts, vi_srt_path)
                 yield send(log=f"Vietnamese SRT saved: {vi_srt_path.name}", level="success")
-                # Use VI SRT for burning (default)
                 if do_burn and do_burn_vi:
                     srt_path = vi_srt_path
         except Exception as e:
@@ -562,17 +801,20 @@ def process_video_full(data: dict) -> Generator[str, None, None]:
         source_for_voice = burned_path if burned_path else video_path
         voice_path = out_dir / f"{stem}_vi_voice.mp4"
         try:
-            ok, err = asyncio.run(convert_voice(
-                video_path=source_for_voice,
-                segments=segments,
-                translated_texts=translated_texts,
-                output_path=voice_path,
-                ffmpeg=ffmpeg,
-                tts_voice=data.get("tts_voice", "vi-VN-HoaiMyNeural"),
-                tts_engine=data.get("tts_engine", "edge-tts"),
-                keep_bg_music=data.get("keep_bg_music", True),
-                bg_volume=float(data.get("bg_volume", 0.15)),
-            ))
+            with tempfile.TemporaryDirectory(prefix="tts_") as tts_tmpdir:
+                tts = MultiProviderTTS(
+                    voice=data.get("tts_voice", "vi-VN-HoaiMyNeural"),
+                    engine=data.get("tts_engine", "edge-tts"),
+                )
+                tts_clips = asyncio.run(tts.generate_all(segments, translated_texts, Path(tts_tmpdir)))
+                mixer = AudioMixer(ffmpeg)
+                ok, err = mixer.mix(
+                    video_path=source_for_voice,
+                    tts_clips=tts_clips,
+                    output_path=voice_path,
+                    keep_bg_music=data.get("keep_bg_music", True),
+                    bg_volume=float(data.get("bg_volume", 0.15)),
+                )
             if ok:
                 yield send(log=f"Voice converted: {voice_path.name}", level="success")
                 yield send(overall=98, overall_lbl="Voice done")
