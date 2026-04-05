@@ -5,7 +5,15 @@
             <div class="card">
               <div class="card-header"><span class="card-title" data-i18n="lbl_tr_settings">Cài đặt phiên âm</span></div>
               <div class="field"><label data-i18n="lbl_video_folder">Thư mục video</label><input type="text" id="tr-dir" placeholder="./Downloaded" value="./Downloaded"></div>
-              <div class="field"><label data-i18n="lbl_single_file">File đơn (tùy chọn)</label><input type="text" id="tr-file" placeholder="/path/to/video.mp4"></div>
+              <div class="field">
+                <label data-i18n="lbl_single_file">File đơn (tùy chọn)</label>
+                <div class="flex-center gap-8">
+                  <input type="text" id="tr-file" placeholder="/path/to/video.mp4" style="flex:1">
+                  <button class="btn btn-secondary btn-sm" type="button" onclick="document.getElementById('tr-import-file')?.click()" data-i18n="btn_import_file">Import</button>
+                  <input type="file" id="tr-import-file" accept="video/*,.ass" style="display:none">
+                </div>
+                <div class="text-xs text-muted" id="tr-file-name">--</div>
+              </div>
               <div class="field"><label data-i18n="lbl_output_dir">Thư mục xuất (tùy chọn)</label><input type="text" id="tr-out" placeholder="Leave empty = same as video"></div>
               <div class="grid-2">
                 <div class="field">
@@ -33,6 +41,36 @@
                 <label class="check-item"><input type="checkbox" id="tr-srt"><span data-i18n="lbl_export_srt">Xuất SRT</span></label>
                 <label class="check-item"><input type="checkbox" id="tr-skip" checked><span data-i18n="lbl_skip_existing">Bỏ qua đã có</span></label>
                 <label class="check-item"><input type="checkbox" id="tr-sc"><span data-i18n="lbl_simplified">Chữ giản thể</span></label>
+              </div>
+              <div class="card" style="margin-top:12px">
+                <div class="card-header"><span class="card-title">Nghe thử giọng</span></div>
+                <div class="grid-2">
+                  <div class="field">
+                    <label>TTS Engine</label>
+                    <select id="tr-tts-engine">
+                      <option value="fpt-ai" selected>FPT AI TTS</option>
+                      <option value="edge-tts">Edge TTS (Microsoft)</option>
+                      <option value="gtts">gTTS (Google)</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label>Giọng đọc</label>
+                    <select id="tr-tts-voice">
+                      <option value="banmai" selected>Ban Mai (FPT)</option>
+                      <option value="thuminh">Thu Minh (FPT)</option>
+                      <option value="myan">Mỹ An (FPT)</option>
+                      <option value="leminh">Lê Minh (FPT)</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="field">
+                  <label>Nhập text để nghe thử</label>
+                  <textarea id="tr-preview-text" rows="3" placeholder="Nhập một câu tiếng Việt để nghe thử giọng đọc"></textarea>
+                </div>
+                <div class="btn-group" style="margin-top:8px;align-items:center;gap:10px;">
+                  <button class="btn btn-secondary" type="button" id="btn-tr-preview" onclick="previewTranscribeVoice()">Nghe thử</button>
+                  <audio id="tr-preview-audio" controls style="display:none;max-width:320px"></audio>
+                </div>
               </div>
               <div class="btn-group mt-12">
                 <button class="btn btn-primary" id="btn-tr" onclick="startTranscribe()" data-i18n="btn_start_tr">Bắt đầu phiên âm</button>

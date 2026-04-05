@@ -60,7 +60,21 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "openai_key": "",
         "hf_token": "",
         "preferred_provider": "deepseek",
-        "naming_enabled": False,
+        "naming_enabled": True,
+    },
+    "upload": {
+        "platform": "youtube",
+        "auto_upload": False,
+        "youtube": {
+            "title_template": "{title}",
+            "description_template": "{title}",
+            "privacy_status": "private",
+        },
+        "tiktok": {
+            "title_template": "{title}",
+            "caption_template": "{title}",
+            "privacy_status": "private",
+        },
     },
     "video_process": {
         "enabled": True,
@@ -74,10 +88,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "keep_bg_music": False,
         "keep_bg": False,
         "blur_zone": "bottom",
-        "tts_voice": "vi-VN-HoaiMyNeural",
-        "tts_engine": "edge-tts",
+        "tts_voice": "banmai",
+        "tts_engine": "fpt-ai",
+        "fpt_api_key": "ssMeU5l89LMLfg8jhDzTBWV7D22s1xOy",
         "bg_volume": 0.15,
         "font_size": 18,
         "blur_height": 15,
+        "subtitle_format": "ass",
     },
 }

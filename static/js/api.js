@@ -20,16 +20,40 @@ const LoadingUI = (() => {
 
 /* ── API wrapper ─────────────────────────────────────────────────────────── */
 const API = {
+  async _parseResponse(r) {
+    const contentType = (r.headers.get('Content-Type') || '').toLowerCase();
+    if (!contentType.includes('application/json')) {
+      const raw = await r.text();
+      const preview = (raw || '').replace(/\s+/g, ' ').trim().slice(0, 180);
+      throw new Error(`Server trả về dữ liệu không phải JSON (HTTP ${r.status}). ${preview || 'Vui lòng kiểm tra log backend.'}`);
+    }
+
+    let data;
+    try {
+      data = await r.json();
+    } catch (_err) {
+      throw new Error(`Không thể đọc JSON từ server (HTTP ${r.status}).`);
+    }
+
+    if (!r.ok) {
+      const msg = data?.error || data?.message || `HTTP ${r.status}`;
+      throw new Error(msg);
+    }
+    return data;
+  },
   async get(url) {
     LoadingUI.start();
-    try { const r = await fetch(url); return r.json(); }
+    try {
+      const r = await fetch(url);
+      return await API._parseResponse(r);
+    }
     finally { LoadingUI.stop(); }
   },
   async post(url, data) {
     LoadingUI.start();
     try {
       const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
-      return r.json();
+      return await API._parseResponse(r);
     } finally { LoadingUI.stop(); }
   },
   async postRaw(url, data) {

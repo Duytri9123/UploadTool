@@ -4,25 +4,25 @@ let _downloadingUrl = null; // URL đang được tải
 let _queueItemProgress = Object.create(null);
 let _queueItemState = Object.create(null);
 
-function syncDownloadPostProcessControls() {
-  const enabled = document.getElementById('dl-vp-enabled')?.checked !== false;
-  const burn = document.getElementById('dl-vp-burn-vi');
-  const voice = document.getElementById('dl-vp-voice');
-  const transWrap = document.getElementById('dl-translate-wrap');
-  if (burn) burn.disabled = !enabled;
-  if (voice) voice.disabled = !enabled;
-  if (transWrap) transWrap.style.display = enabled ? 'block' : 'none';
-}
+function _resolveQueueProcessOptions() {
+  const burnEnabled = document.getElementById('proc-burn')?.checked ?? true;
+  const burnVi = burnEnabled && (document.getElementById('proc-burn-vi')?.checked ?? true);
+  const voiceVi = document.getElementById('proc-voice')?.checked ?? false;
+  const translateSubs = document.getElementById('proc-translate-subs')?.checked ?? true;
+  const keepBg = document.getElementById('proc-keep-bg')?.checked ?? false;
+  const provider = (typeof _getProcessProvider === 'function')
+    ? (_getProcessProvider('translate') || 'deepseek')
+    : (document.getElementById('proc-trans-provider-ai')?.value || 'deepseek');
 
-document.addEventListener('DOMContentLoaded', () => {
-  const master = document.getElementById('dl-vp-enabled');
-  const burn = document.getElementById('dl-vp-burn-vi');
-  const voice = document.getElementById('dl-vp-voice');
-  if (master) master.addEventListener('change', syncDownloadPostProcessControls);
-  if (burn) burn.addEventListener('change', syncDownloadPostProcessControls);
-  if (voice) voice.addEventListener('change', syncDownloadPostProcessControls);
-  syncDownloadPostProcessControls();
-});
+  return {
+    enabled: burnVi || voiceVi,
+    burn_vi_subs: burnVi,
+    voice_convert: voiceVi,
+    translate_subs: translateSubs,
+    keep_bg_music: keepBg,
+    translate_provider: provider,
+  };
+}
 
 function setQueueItemProgress(url, pct, label) {
   if (!url) return;
@@ -54,17 +54,6 @@ async function loadQueue() {
   const data = await API.get('/api/queue');
   _queue = data || [];
   renderQueue();
-  await loadQueueProcessSettings();
-}
-
-async function loadQueueProcessSettings() {
-  const cfg = await API.get('/api/config');
-  if (!cfg) return;
-
-  const tr = cfg.translation || {};
-  const set = (id, val) => { const el = document.getElementById(id); if (el && (el.value === '' || el.value == null)) el.value = val ?? ''; };
-
-  set('dl-translate-provider', tr.preferred_provider || 'deepseek');
 }
 
 function renderQueue() {
@@ -177,32 +166,131 @@ async function updateQueueItemDesc(url, desc) {
 }
 
 function startQueueDownload() {
+  _runQueueViaProcessApi();
+}
+
+function _buildQueueProcessPayload(videoUrl) {
+  const queueOpts = _resolveQueueProcessOptions();
+  return {
+    video_path: '',
+    video_url: videoUrl || '',
+    out_dir: document.getElementById('proc-out')?.value?.trim() || '',
+    model: document.getElementById('proc-model')?.value || 'base',
+    language: document.getElementById('proc-lang')?.value || 'zh',
+    burn_subs: queueOpts.burn_vi_subs,
+    blur_original: document.getElementById('proc-blur-original')?.checked ?? true,
+    translate_subs: queueOpts.translate_subs,
+    burn_vi_subs: queueOpts.burn_vi_subs,
+    subtitle_format: 'ass',
+    font_size: parseInt(document.getElementById('proc-font-size')?.value || '32', 10),
+    font_color: document.getElementById('proc-font-color')?.value || 'white',
+    margin_v: parseInt(document.getElementById('proc-margin-v')?.value || '20', 10),
+    subtitle_position: document.getElementById('proc-sub-pos')?.value || 'bottom',
+    transcribe_provider: (typeof _getProcessProvider === 'function') ? _getProcessProvider('transcribe') : 'groq',
+    translate_provider: queueOpts.translate_provider,
+    voice_convert: queueOpts.voice_convert,
+    tts_engine: document.getElementById('proc-tts-engine')?.value || 'edge-tts',
+    tts_voice: document.getElementById('proc-tts-voice')?.value || 'vi-VN-HoaiMyNeural',
+    keep_bg_music: queueOpts.keep_bg_music,
+    bg_volume: parseFloat(document.getElementById('proc-bg-vol')?.value || '0.15'),
+    process_mode: window._procMode || 'ai',
+  };
+}
+
+function _runSingleQueueItem(item, index, total) {
+  return new Promise(resolve => {
+    const payload = _buildQueueProcessPayload(item.url);
+    fetch('/api/process_video', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then(res => {
+      if (!res.ok || !res.body) {
+        _appendProcLog('[Queue] Không thể bắt đầu xử lý: ' + (item.url || ''), 'error');
+        resolve(false);
+        return;
+      }
+
+      _appendProcLog('[Queue ' + index + '/' + total + '] ' + (item.url || ''), 'info');
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      function read() {
+        reader.read().then(({ done, value }) => {
+          if (done) {
+            resolve(true);
+            return;
+          }
+          const text = decoder.decode(value, { stream: true });
+          text.split('\n').filter(l => l.trim()).forEach(line => {
+            try {
+              const d = JSON.parse(line);
+              if (d.log) _appendProcLog(d.log, d.level || 'info');
+              if (d.overall !== undefined) {
+                _setProcProgress(d.overall, d.overall_lbl || '');
+                setQueueItemProgress(item.url, d.overall, d.overall_lbl || '');
+              }
+            } catch (_) {}
+          });
+          read();
+        }).catch(() => resolve(false));
+      }
+      read();
+    }).catch(() => {
+      _appendProcLog('[Queue] Lỗi kết nối khi xử lý: ' + (item.url || ''), 'error');
+      resolve(false);
+    });
+  });
+}
+
+async function _runQueueViaProcessApi() {
   if (!_queue.length) { toast(t('lbl_queue_empty'), 'error'); return; }
   if (_dlRunning) return;
+
   _dlRunning = true;
   _queueItemProgress = Object.create(null);
   _queueItemState = Object.create(null);
 
-  const vpEnabled = document.getElementById('dl-vp-enabled')?.checked !== false;
-  const burnVi = document.getElementById('dl-vp-burn-vi')?.checked !== false;
-  const voiceVi = document.getElementById('dl-vp-voice')?.checked !== false;
-  const hasPostProcess = vpEnabled && (burnVi || voiceVi);
-  const translateProvider = document.getElementById('dl-translate-provider')?.value || 'deepseek';
-
   const btn = document.getElementById('btn-dl');
-  if (btn) { btn.disabled = true; btn.textContent = t('lbl_queue_running'); }
-  clearLog('dl-log');
-  if (typeof resetDownloadProgressBars === 'function') resetDownloadProgressBars();
-  socket.emit('start_download', {
-    use_queue: true,
-    post_process: {
-      enabled: hasPostProcess,
-      burn_subs: burnVi,
-      translate_subs: burnVi || voiceVi,
-      burn_vi_subs: burnVi,
-      voice_convert: voiceVi,
-      keep_bg_music: false,
-      translate_provider: translateProvider,
+  if (btn) { btn.disabled = true; btn.textContent = 'Đang chạy hàng chờ...'; }
+
+  clearLog('proc-log');
+  _setProcProgress(0, 'Bắt đầu hàng chờ...');
+
+  const queueSnapshot = [..._queue];
+  const total = queueSnapshot.length;
+
+  for (let i = 0; i < queueSnapshot.length; i += 1) {
+    const item = queueSnapshot[i];
+    const index = i + 1;
+    _downloadingUrl = item.url;
+    markQueueItemState(item.url, 'running');
+    setQueueItemProgress(item.url, 0, 'Đang chờ xử lý');
+    const cnt = document.getElementById('queue-count');
+    if (cnt) cnt.textContent = _queue.length + ' (' + index + '/' + total + ')';
+
+    const ok = await _runSingleQueueItem(item, index, total);
+
+    if (ok) {
+      markQueueItemState(item.url, 'done');
+      setQueueItemProgress(item.url, 100, 'Hoàn tất');
+      _queue = _queue.filter(q => q.url !== item.url);
+      renderQueue();
+      try {
+        await API.post('/api/queue/remove', { url: item.url });
+      } catch (_) {}
+    } else {
+      markQueueItemState(item.url, 'failed');
+      setQueueItemProgress(item.url, 0, 'Lỗi xử lý');
     }
-  });
+  }
+
+  _downloadingUrl = null;
+  _dlRunning = false;
+  if (btn) { btn.disabled = false; btn.textContent = 'Chạy hàng chờ'; }
+
+  const hasFailed = Object.values(_queueItemState).some(s => s === 'failed');
+  _setProcProgress(hasFailed ? 0 : 100, hasFailed ? 'Hoàn tất có lỗi' : 'Hoàn tất hàng chờ');
+  renderQueue();
+  toast(hasFailed ? 'Hàng chờ hoàn tất, có mục lỗi' : 'Hàng chờ đã hoàn tất', hasFailed ? 'warning' : 'success');
 }
