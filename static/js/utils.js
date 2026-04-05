@@ -16,7 +16,9 @@ function appendLog(id, msg, level) {
   const box = document.getElementById(id); if (!box) return;
   const line = document.createElement('div');
   line.className = 'log-' + (level || 'info');
-  line.textContent = msg;
+  const now = new Date();
+  const ts = now.toTimeString().slice(0, 8);
+  line.textContent = `[${ts}] ${msg}`;
   box.appendChild(line);
   box.scrollTop = box.scrollHeight;
 }

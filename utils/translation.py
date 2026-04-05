@@ -34,36 +34,51 @@ def _llm_translate(
     api_url: str,
     api_key: str,
     model: str,
-    timeout: int = 25,
+    timeout: int = 60,
+    batch_size: int = 30,
 ) -> List[str]:
-    numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
-    prompt = (
-        "You are a professional Vietnamese translator for Chinese social media content. "
-        "Translate these Douyin video titles from Chinese to natural Vietnamese. "
-        "Rules: 第X集->Tập X, preserve names/hashtags, keep it short. "
-        "Return ONLY the numbered list, no explanations.\\n\\n" + numbered
-    )
-    payload = json.dumps(
-        {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.1,
-            "max_tokens": 2000,
-        }
-    ).encode()
-    req = urllib.request.Request(
-        api_url,
-        data=payload,
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        data = json.loads(response.read())
-    content = data["choices"][0]["message"]["content"].strip()
-    return _parse_numbered_translation(content, len(texts))
+    """Translate texts in batches to avoid token limits."""
+    if not texts:
+        return []
+
+    all_results: List[str] = [""] * len(texts)
+
+    # Split into batches
+    for batch_start in range(0, len(texts), batch_size):
+        batch = texts[batch_start: batch_start + batch_size]
+        numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(batch))
+        prompt = (
+            "You are a professional Vietnamese translator. "
+            "Translate each line from Chinese to natural Vietnamese. "
+            "Rules: 第X集->Tập X, preserve names/hashtags, keep it concise. "
+            "Return ONLY the numbered list in the same order, no explanations.\n\n"
+            + numbered
+        )
+        payload = json.dumps(
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.1,
+                "max_tokens": min(4000, len(batch) * 80),
+            }
+        ).encode()
+        req = urllib.request.Request(
+            api_url,
+            data=payload,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            data = json.loads(response.read())
+        content = data["choices"][0]["message"]["content"].strip()
+        batch_results = _parse_numbered_translation(content, len(batch))
+        for i, result in enumerate(batch_results):
+            all_results[batch_start + i] = result
+
+    return all_results
 
 
 def get_translation_providers(trans_cfg: Dict) -> List[str]:
@@ -122,6 +137,8 @@ def translate_texts(
                 result[idx] = translated_active[i]
         return result
 
+    _errors: List[str] = []
+
     for provider in provider_order:
         try:
             if provider == "deepseek" and deepseek_key:
@@ -133,8 +150,9 @@ def translate_texts(
                 )
                 if any(result):
                     return _rebuild(result), "deepseek"
+                _errors.append("deepseek: empty result")
 
-            if provider == "openai" and openai_key:
+            elif provider == "openai" and openai_key:
                 result = _llm_translate(
                     source_texts,
                     "https://api.openai.com/v1/chat/completions",
@@ -143,8 +161,9 @@ def translate_texts(
                 )
                 if any(result):
                     return _rebuild(result), "openai"
+                _errors.append("openai: empty result")
 
-            if provider == "groq" and groq_key:
+            elif provider == "groq" and groq_key:
                 result = _llm_translate(
                     source_texts,
                     "https://api.groq.com/openai/v1/chat/completions",
@@ -153,8 +172,9 @@ def translate_texts(
                 )
                 if any(result):
                     return _rebuild(result), "groq"
+                _errors.append("groq: empty result")
 
-            if provider == "huggingface" and hf_token:
+            elif provider == "huggingface" and hf_token:
                 hf_endpoints = [
                     (
                         "https://router.huggingface.co/novita/v3/openai/chat/completions",
@@ -178,7 +198,7 @@ def translate_texts(
                     if any(result):
                         return _rebuild(result), "huggingface"
 
-            if provider == "google":
+            elif provider == "google":
                 translated = []
                 for text in source_texts:
                     query = urllib.parse.quote(text[:500])
@@ -202,9 +222,13 @@ def translate_texts(
                         translated.append("".join(p[0] for p in data[0] if p[0]))
                 if any(translated):
                     return _rebuild(translated), "google"
-        except Exception:
+        except Exception as e:
+            _errors.append(f"{provider}: {e}")
             continue
 
+    # All providers failed — raise with details so caller can log it
+    if _errors:
+        raise RuntimeError("All translation providers failed: " + " | ".join(_errors))
     return list(texts), "fallback"
 
 

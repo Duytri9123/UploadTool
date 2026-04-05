@@ -2,6 +2,7 @@
 async function loadConfig() {
   const cfg = await API.get('/api/config');
   if (!cfg) return;
+  window._loadedCfg = cfg;
 
   const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val ?? ''; };
   const setChk = (id, val) => { const el = document.getElementById(id); if (el) el.checked = !!val; };
@@ -40,6 +41,18 @@ async function loadConfig() {
   set('cfg-deepseek-key', tr.deepseek_key || '');
   set('cfg-openai-key', tr.openai_key || '');
   set('cfg-hf-token', tr.hf_token || '');
+  setChk('cfg-naming-enabled', tr.naming_enabled !== false);
+
+  // Upload defaults
+  const upload = cfg.upload || {};
+  set('cfg-upload-platform', upload.platform || 'youtube');
+  setChk('cfg-upload-auto', upload.auto_upload === true);
+  set('cfg-yt-title-template', upload.youtube?.title_template || '{title}');
+  set('cfg-yt-desc-template', upload.youtube?.description_template || '{title}');
+  set('cfg-yt-privacy', upload.youtube?.privacy_status || 'private');
+  set('cfg-tt-title-template', upload.tiktok?.title_template || '{title}');
+  set('cfg-tt-caption-template', upload.tiktok?.caption_template || '{title}');
+  set('cfg-tt-privacy', upload.tiktok?.privacy_status || 'private');
 
   // Video processing
   setChk('vp-enabled', cfg.video_process?.enabled !== false);
@@ -53,8 +66,7 @@ async function loadConfig() {
   setChk('vp-keep-bg', cfg.video_process?.keep_bg_music === true || cfg.video_process?.keep_bg === true);
   set('vp-blur-zone', cfg.video_process?.blur_zone || 'bottom');
   set('vp-tts-voice', cfg.video_process?.tts_voice || 'vi-VN-HoaiMyNeural');
-  set('vp-font-size', cfg.video_process?.font_size ?? 18);
-  set('vp-blur-height', cfg.video_process?.blur_height ?? 15);
+  set('vp-font-size', cfg.video_process?.font_size ?? 22);
 }
 
 async function saveConfig() {
@@ -91,6 +103,21 @@ async function saveConfig() {
       deepseek_key: get('cfg-deepseek-key'),
       openai_key: get('cfg-openai-key'),
       hf_token: get('cfg-hf-token'),
+      naming_enabled: getChk('cfg-naming-enabled'),
+    },
+    upload: {
+      platform: get('cfg-upload-platform') || 'youtube',
+      auto_upload: getChk('cfg-upload-auto'),
+      youtube: {
+        title_template: get('cfg-yt-title-template') || '{title}',
+        description_template: get('cfg-yt-desc-template') || '{title}',
+        privacy_status: get('cfg-yt-privacy') || 'private',
+      },
+      tiktok: {
+        title_template: get('cfg-tt-title-template') || '{title}',
+        caption_template: get('cfg-tt-caption-template') || '{title}',
+        privacy_status: get('cfg-tt-privacy') || 'private',
+      },
     },
     video_process: {
       enabled: getChk('vp-enabled'),
@@ -105,8 +132,8 @@ async function saveConfig() {
       keep_bg: getChk('vp-keep-bg'),
       blur_zone: get('vp-blur-zone'),
       tts_voice: get('vp-tts-voice'),
-      font_size: parseInt(get('vp-font-size')) || 18,
-      blur_height: parseInt(get('vp-blur-height')) || 15,
+      font_size: parseInt(get('vp-font-size')) || 22,
+      subtitle_format: 'ass',
     }
   };
 

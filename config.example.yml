@@ -81,8 +81,9 @@ video_process:
   keep_bg_music: false
   keep_bg: false
   blur_zone: bottom
-  tts_voice: vi-VN-HoaiMyNeural
-  tts_engine: edge-tts
+  tts_voice: banmai
+  tts_engine: fpt-ai
+  fpt_api_key: ssMeU5l89LMLfg8jhDzTBWV7D22s1xOy
   bg_volume: 0.15
   font_size: 18
   blur_height: 15

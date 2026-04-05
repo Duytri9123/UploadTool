@@ -44,3 +44,6 @@ config*.yml
 .cookies.json
 config/cookies.json
 .omx/
+client_secrets.json
+youtube_token.json
+.youtube_tokens/

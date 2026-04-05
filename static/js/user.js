@@ -158,7 +158,9 @@ function _extractAwemeIdFromUrl(url) {
 }
 
 function _syncQueuedAwemeIds() {
-  const list = Array.isArray(window._queue) ? window._queue : (Array.isArray(_queue) ? _queue : []);
+  const windowQueue = Array.isArray(window._queue) ? window._queue : [];
+  const localQueue = (typeof _queue !== 'undefined' && Array.isArray(_queue)) ? _queue : [];
+  const list = windowQueue.length ? windowQueue : localQueue;
   const next = new Set();
   list.forEach(item => {
     const id = _extractAwemeIdFromUrl(item?.url);
@@ -312,8 +314,6 @@ async function downloadSelected() {
   const selected = _userVideos.filter(v => _selectedIds.has(v.aweme_id));
   if (!selected.length) return;
 
-  await _ensureItemsTranslatedForQueue(selected);
-
   const items = selected.map(v => ({
     url: 'https://www.douyin.com/video/' + v.aweme_id,
     desc: v.desc_vi || v.desc,
@@ -324,6 +324,26 @@ async function downloadSelected() {
   if (res?.added > 0) toast(t('toast_added_queue') + ' (' + res.added + ')', 'success');
   else toast('Khong co video moi duoc them (co the da ton tai)', 'warning');
   if (typeof loadQueue === 'function') loadQueue();
+
+  // Add to queue first for responsiveness; translate descriptions in background.
+  const needTranslate = selected.filter(v => !v.desc_vi && v.desc);
+  if (needTranslate.length) {
+    _ensureItemsTranslatedForQueue(needTranslate)
+      .then(async () => {
+        const updates = needTranslate
+          .filter(v => v.desc_vi)
+          .map(v => API.post('/api/queue/update', {
+            url: 'https://www.douyin.com/video/' + v.aweme_id,
+            desc: v.desc_vi,
+          }));
+        if (updates.length) {
+          await Promise.allSettled(updates);
+          if (typeof loadQueue === 'function') loadQueue();
+        }
+      })
+      .catch(() => {});
+  }
+
   _selectedIds.clear();
   _renderVideos();
 }

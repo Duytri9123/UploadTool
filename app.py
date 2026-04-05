@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Douyin Downloader — Flask Web UI"""
-import asyncio, sys, time, threading, json, logging
+import asyncio, sys, time, threading, json, logging, io
 from pathlib import Path
 from datetime import datetime
 import yaml
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_file
 from flask_socketio import SocketIO, emit
 
 ROOT = Path(__file__).parent
@@ -158,6 +158,45 @@ def save_cfg(cfg):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False)
 
+
+def _deep_merge_dict(base, updates):
+    merged = dict(base or {})
+    for key, value in (updates or {}).items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_dict(merged.get(key), value)
+        else:
+            merged[key] = value
+    return merged
+
+
+_naming_title_cache = {}
+
+
+def _resolve_naming_title(raw_title: str) -> str:
+    raw_title = str(raw_title or "").strip()
+    if not raw_title:
+        return "video"
+
+    cfg = load_cfg()
+    tr_cfg = dict(cfg.get("translation") or {})
+    if not tr_cfg.get("naming_enabled", False):
+        return raw_title
+
+    cache_key = (raw_title, tr_cfg.get("preferred_provider", "auto"))
+    if cache_key in _naming_title_cache:
+        return _naming_title_cache[cache_key]
+
+    try:
+        from utils.translation import translate_texts
+
+        translated, _provider = translate_texts([raw_title], tr_cfg, tr_cfg.get("preferred_provider", "auto"))
+        resolved = (translated[0] if translated else "").strip() or raw_title
+    except Exception:
+        resolved = raw_title
+
+    _naming_title_cache[cache_key] = resolved
+    return resolved
+
 # ── SocketIO progress shim ────────────────────────────────────────────────────
 class SocketProgress:
     _STEPS = 6
@@ -287,7 +326,7 @@ def get_config():
 def post_config():
     data = request.json or {}
     cfg = load_cfg()
-    cfg.update(data)
+    cfg = _deep_merge_dict(cfg, data)
     save_cfg(cfg)
     return jsonify({"ok": True})
 
@@ -818,68 +857,215 @@ def translation_status():
         "has_hf": bool(trans_cfg.get("hf_token")),
     })
 
+@app.route("/api/tts_preview", methods=["POST"])
+def tts_preview():
+    data = request.json or {}
+    text = str(data.get("text") or "").strip()
+    tts_engine = str(data.get("tts_engine") or "edge-tts").strip().lower()
+    tts_voice = str(data.get("tts_voice") or "banmai").strip()
+
+    if not text:
+        return jsonify({"ok": False, "error": "Text preview is empty"}), 400
+
+    try:
+        import tempfile
+        from pathlib import Path as _Path
+        from core.video_processor import _tts_edge, _tts_gtts, _tts_fpt_ai, FPT_TTS_DEFAULT_KEY
+        cfg = load_cfg()
+        vp_cfg = cfg.get("video_process") or {}
+        fpt_api_key = (
+            str(data.get("fpt_api_key") or "").strip()
+            or str(vp_cfg.get("fpt_api_key") or "").strip()
+            or FPT_TTS_DEFAULT_KEY
+        )
+        fpt_speed = int(data.get("fpt_speed") or 0)
+
+        with tempfile.TemporaryDirectory(prefix="tts_preview_") as tmpdir:
+            out_path = _Path(tmpdir) / "preview.mp3"
+            if tts_engine == "gtts":
+                ok = _tts_gtts(text, "vi", out_path)
+            elif tts_engine == "fpt-ai":
+                ok = asyncio.run(_tts_fpt_ai(text, tts_voice, out_path, fpt_api_key, fpt_speed))
+            else:
+                ok = asyncio.run(_tts_edge(text, tts_voice, out_path))
+
+            if not ok or (not out_path.exists()) or out_path.stat().st_size <= 0:
+                return jsonify({"ok": False, "error": "Unable to synthesize preview audio"}), 500
+
+            audio_data = io.BytesIO(out_path.read_bytes())
+            audio_data.seek(0)
+            return send_file(audio_data, mimetype="audio/mpeg", as_attachment=False, download_name="preview.mp3")
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
 @app.route("/api/transcribe", methods=["POST"])
 def transcribe():
-    data = request.json or {}
+    import tempfile
+    import shutil
+    from pathlib import Path as _Path
+
+    data = {}
+    if request.form:
+        data.update(request.form.to_dict(flat=True))
+    if request.is_json:
+        data.update(request.get_json(silent=True) or {})
+
+    uploaded_tmp_dir = None
+    uploaded_file = request.files.get("video_file") if request.files else None
+    if uploaded_file and uploaded_file.filename:
+        from utils.validators import sanitize_filename
+        uploaded_tmp_dir = _Path(tempfile.mkdtemp(prefix="tr_upload_"))
+        original_name = _Path(uploaded_file.filename).name
+        safe_name = sanitize_filename(_Path(original_name).stem) + _Path(original_name).suffix
+        saved_path = uploaded_tmp_dir / safe_name
+        uploaded_file.save(saved_path)
+        data["single"] = str(saved_path)
+
     import json as _j
     from flask import Response, stream_with_context
 
     def generate():
         from cli.whisper_transcribe import find_ffmpeg, find_videos, transcribe_file
         from pathlib import Path as P
+        import re
+
+        def as_bool(value, default=False):
+            if isinstance(value, bool):
+                return value
+            if value is None:
+                return default
+            txt = str(value).strip().lower()
+            if txt in ("1", "true", "yes", "on"):
+                return True
+            if txt in ("0", "false", "no", "off", ""):
+                return False
+            return default
 
         def send(**kw): return _j.dumps(kw) + "\n"
 
-        ffmpeg = find_ffmpeg()
-        if not ffmpeg:
-            yield send(log="✗ ffmpeg not found", level="error"); return
+        def ass_time_to_srt(t: str) -> str:
+            # ASS: h:mm:ss.cs -> SRT: hh:mm:ss,mmm
+            m = re.match(r"\s*(\d+):(\d+):(\d+)(?:\.(\d+))?\s*", str(t or ""))
+            if not m:
+                return "00:00:00,000"
+            h = int(m.group(1))
+            mm = int(m.group(2))
+            ss = int(m.group(3))
+            cs_raw = (m.group(4) or "0")[:2].ljust(2, "0")
+            ms = int(cs_raw) * 10
+            return f"{h:02d}:{mm:02d}:{ss:02d},{ms:03d}"
+
+        def strip_ass_tags(text: str) -> str:
+            txt = str(text or "")
+            txt = re.sub(r"\{[^}]*\}", "", txt)
+            txt = txt.replace(r"\N", "\n").replace(r"\n", "\n")
+            return txt.strip()
+
+        def convert_ass_to_outputs(ass_file: P, out_dir: str | None, export_srt: bool) -> tuple[bool, str]:
+            ass_file = P(ass_file)
+            if not ass_file.exists():
+                return False, f"ASS file not found: {ass_file}"
+
+            target_dir = P(out_dir) if out_dir else ass_file.parent
+            target_dir.mkdir(parents=True, exist_ok=True)
+            stem = ass_file.stem
+            txt_path = target_dir / f"{stem}.transcript.txt"
+            srt_path = target_dir / f"{stem}.transcript.srt"
+
+            raw = ass_file.read_text(encoding="utf-8", errors="replace")
+            dialogues = []
+            for line in raw.splitlines():
+                if not line.startswith("Dialogue:"):
+                    continue
+                content = line[len("Dialogue:"):].lstrip()
+                parts = content.split(",", 9)
+                if len(parts) < 10:
+                    continue
+                start = ass_time_to_srt(parts[1])
+                end = ass_time_to_srt(parts[2])
+                text = strip_ass_tags(parts[9])
+                if text:
+                    dialogues.append((start, end, text))
+
+            if not dialogues:
+                return False, "ASS has no dialogue lines"
+
+            txt_path.write_text("\n".join([d[2] for d in dialogues]), encoding="utf-8")
+            if export_srt:
+                srt_blocks = []
+                for i, (start, end, text) in enumerate(dialogues, 1):
+                    srt_blocks.append(f"{i}\n{start} --> {end}\n{text}\n")
+                srt_path.write_text("\n".join(srt_blocks), encoding="utf-8")
+
+            return True, f"{txt_path.name}" + (f" + {srt_path.name}" if export_srt else "")
+
         try:
-            import whisper
-        except ImportError:
-            yield send(log="✗ pip install openai-whisper", level="error"); return
-
-        converter = None
-        if data.get("sc"):
+            ffmpeg = find_ffmpeg()
+            if not ffmpeg:
+                yield send(log="✗ ffmpeg not found", level="error"); return
             try:
-                from opencc import OpenCC; converter = OpenCC("t2s")
+                import whisper
             except ImportError:
-                yield send(log="⚠ OpenCC not installed", level="warning")
+                yield send(log="✗ pip install openai-whisper", level="error"); return
 
-        model_name = data.get("model","base")
-        yield send(log=f"ℹ Loading model: {model_name}…")
-        model = whisper.load_model(model_name)
-        yield send(log=f"✓ Model {model_name} loaded", level="success")
+            converter = None
+            if as_bool(data.get("sc"), False):
+                try:
+                    from opencc import OpenCC; converter = OpenCC("t2s")
+                except ImportError:
+                    yield send(log="⚠ OpenCC not installed", level="warning")
 
-        single = (data.get("single") or "").strip()
-        videos = [P(single)] if single else find_videos(
-            data.get("folder","./Downloaded"),
-            skip_existing=data.get("skip",True),
-            output_dir=data.get("out_dir") or None)
+            single = (data.get("single") or "").strip()
+            out_dir = (data.get("out_dir") or "").strip() or None
+            export_srt = as_bool(data.get("srt"), False)
 
-        if not videos:
-            yield send(log="⚠ No videos found", level="warning"); return
+            if single and P(single).suffix.lower() == ".ass":
+                yield send(log=f"ℹ Import ASS: {P(single).name}", level="info")
+                yield send(overall=25, overall_lbl="Parsing ASS...", file=30, file_lbl="reading")
+                ok, info = convert_ass_to_outputs(P(single), out_dir, export_srt)
+                if ok:
+                    yield send(log=f"✓ Converted ASS: {info}", level="success")
+                    yield send(overall=100, overall_lbl="完成", file=100, file_lbl="done")
+                else:
+                    yield send(log=f"✗ {info}", level="error")
+                return
 
-        yield send(log=f"ℹ Found {len(videos)} video(s)")
-        fmts = {"txt"}
-        if data.get("srt"): fmts.add("srt")
-        out_dir = (data.get("out_dir") or "").strip() or None
-        ok_c = fail_c = 0
+            model_name = data.get("model","base")
+            yield send(log=f"ℹ Loading model: {model_name}…")
+            model = whisper.load_model(model_name)
+            yield send(log=f"✓ Model {model_name} loaded", level="success")
 
-        for i, v in enumerate(videos, 1):
-            yield send(log=f"▶ [{i}/{len(videos)}] {v.name}", level="url")
-            yield send(overall=int((i-1)/len(videos)*100), overall_lbl=f"{i-1}/{len(videos)}", file=0, file_lbl="extracting…")
-            try:
-                ok = transcribe_file(v, model, ffmpeg, fmts, data.get("lang","zh"), converter, out_dir)
-                if ok: ok_c+=1; yield send(log="✓ Done", level="success")
-                else:  fail_c+=1; yield send(log="✗ Failed", level="error")
-            except Exception as e:
-                fail_c+=1; yield send(log=f"✗ {e}", level="error")
-            pct = int(i/len(videos)*100)
-            yield send(overall=pct, overall_lbl=f"{i}/{len(videos)}  ✓{ok_c} ✗{fail_c}", file=100, file_lbl="done")
+            videos = [P(single)] if single else find_videos(
+                data.get("folder","./Downloaded"),
+                skip_existing=as_bool(data.get("skip"), True),
+                output_dir=out_dir)
 
-        yield send(log=f"{'─'*40}", level="result")
-        yield send(log=f"成功:{ok_c}  失败:{fail_c}", level="result")
-        yield send(overall=100, overall_lbl="完成", file=100, file_lbl="")
+            if not videos:
+                yield send(log="⚠ No videos found", level="warning"); return
+
+            yield send(log=f"ℹ Found {len(videos)} video(s)")
+            fmts = {"txt"}
+            if export_srt: fmts.add("srt")
+            ok_c = fail_c = 0
+
+            for i, v in enumerate(videos, 1):
+                yield send(log=f"▶ [{i}/{len(videos)}] {v.name}", level="url")
+                yield send(overall=int((i-1)/len(videos)*100), overall_lbl=f"{i-1}/{len(videos)}", file=0, file_lbl="extracting…")
+                try:
+                    ok = transcribe_file(v, model, ffmpeg, fmts, data.get("lang","zh"), converter, out_dir)
+                    if ok: ok_c+=1; yield send(log="✓ Done", level="success")
+                    else:  fail_c+=1; yield send(log="✗ Failed", level="error")
+                except Exception as e:
+                    fail_c+=1; yield send(log=f"✗ {e}", level="error")
+                pct = int(i/len(videos)*100)
+                yield send(overall=pct, overall_lbl=f"{i}/{len(videos)}  ✓{ok_c} ✗{fail_c}", file=100, file_lbl="done")
+
+            yield send(log=f"{'─'*40}", level="result")
+            yield send(log=f"成功:{ok_c}  失败:{fail_c}", level="result")
+            yield send(overall=100, overall_lbl="完成", file=100, file_lbl="")
+        finally:
+            if uploaded_tmp_dir:
+                shutil.rmtree(uploaded_tmp_dir, ignore_errors=True)
 
     return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
 
@@ -980,6 +1166,9 @@ def process_video():
                 if not aweme_data:
                     raise RuntimeError("Failed to fetch video detail")
 
+                raw_title = str(aweme_data.get("desc") or "video").strip() or "video"
+                resolved_title = _resolve_naming_title(raw_title)
+
                 out_path = Path(out_dir).expanduser() if out_dir else Path(cfg.get("path") or "./Downloaded")
                 file_manager = FileManager(str(out_path))
                 downloader = VideoDownloader(
@@ -1004,8 +1193,7 @@ def process_video():
                 play_url, headers = play_info
                 from utils.validators import sanitize_filename
 
-                desc = (aweme_data.get("desc") or "").strip() or "video"
-                base_name = sanitize_filename(f"{desc}_{aweme_id}")
+                base_name = sanitize_filename(f"{resolved_title}_{aweme_id}")
                 save_dir = out_path
                 save_dir.mkdir(parents=True, exist_ok=True)
                 save_path = save_dir / f"{base_name}.mp4"
@@ -1024,19 +1212,23 @@ def process_video():
                 if not ok or not save_path.exists():
                     raise RuntimeError("Download failed")
 
-                return save_path.resolve()
+                return save_path.resolve(), resolved_title
 
         try:
             req = dict(data or {})
             video_path = str(req.get("video_path") or "").strip()
             video_url = str(req.get("video_url") or "").strip()
+            req.setdefault("cleanup_outputs", True)
+            req.setdefault("delete_source_after_process", False)
 
             if not video_path and video_url:
                 yield _j.dumps({"log": f"Resolving URL: {video_url}", "level": "info"}, ensure_ascii=False) + "\n"
                 yield _j.dumps({"overall": 2, "overall_lbl": "Resolving URL..."}, ensure_ascii=False) + "\n"
                 try:
-                    downloaded_path = asyncio.run(_download_video_from_url(video_url, str(req.get("out_dir") or "").strip()))
+                    downloaded_path, downloaded_title = asyncio.run(_download_video_from_url(video_url, str(req.get("out_dir") or "").strip()))
                     req["video_path"] = str(downloaded_path)
+                    req["video_title"] = downloaded_title
+                    req["delete_source_after_process"] = True
                     yield _j.dumps({"log": f"Downloaded video: {downloaded_path}", "level": "success"}, ensure_ascii=False) + "\n"
                     yield _j.dumps({"overall": 4, "overall_lbl": "Download done, start processing..."}, ensure_ascii=False) + "\n"
                 except Exception as e:
@@ -1085,8 +1277,195 @@ def _preload_whisper_model():
         pass
 
 
+# ── YouTube Upload ─────────────────────────────────────────────────────────
+_youtube_uploader = None
+
+def _get_youtube_uploader():
+    global _youtube_uploader
+    if _youtube_uploader is None:
+        from tools.youtube_uploader import YouTubeUploader
+        _youtube_uploader = YouTubeUploader(client_secrets_file="client_secrets.json")
+    return _youtube_uploader
+
+@app.route("/api/youtube_auth", methods=["GET", "POST"])
+def youtube_auth():
+    """Get YouTube OAuth URL or handle OAuth callback."""
+    try:
+        uploader = _get_youtube_uploader()
+
+        if request.method == "POST":
+            # Start a fresh OAuth flow and return auth URL for frontend popup.
+            uploader.revoke_auth()
+            auth_url = uploader.get_auth_url()
+            if auth_url:
+                return jsonify({"ok": True, "authenticated": False, "auth_url": auth_url})
+            err_msg = str(getattr(uploader, "last_error", "") or "").strip()
+            return jsonify({
+                "ok": False,
+                "authenticated": False,
+                "error_code": "auth_failed",
+                "error": err_msg or "Unable to start OAuth flow"
+            }), 401
+
+        # GET: Return auth URL or status
+        if uploader.authenticate():
+            channel = uploader.get_channel_info()
+            return jsonify({"ok": True, "authenticated": True, "channel": channel})
+
+        auth_url = uploader.get_auth_url()
+        if not auth_url:
+            err_msg = str(getattr(uploader, "last_error", "") or "").strip()
+            return jsonify({
+                "ok": False,
+                "authenticated": False,
+                "error_code": "auth_url_unavailable",
+                "error": err_msg or "client_secrets.json not found"
+            }), 400
+
+        return jsonify({"ok": True, "authenticated": False, "auth_url": auth_url})
+    except ModuleNotFoundError as e:
+        app.logger.exception("youtube_auth missing dependency")
+        return jsonify({
+            "ok": False,
+            "authenticated": False,
+            "error_code": "missing_dependency",
+            "error": f"Missing dependency: {e}"
+        }), 500
+    except FileNotFoundError as e:
+        app.logger.exception("youtube_auth missing file")
+        return jsonify({
+            "ok": False,
+            "authenticated": False,
+            "error_code": "missing_file",
+            "error": str(e)
+        }), 400
+    except Exception as e:
+        app.logger.exception("youtube_auth failed")
+        return jsonify({
+            "ok": False,
+            "authenticated": False,
+            "error_code": "internal_error",
+            "error": f"YouTube auth error: {e}"
+        }), 500
+
+
+@app.route("/oauth2callback", methods=["GET"])
+def youtube_oauth2_callback():
+        """Handle Google OAuth callback and close popup window."""
+        uploader = _get_youtube_uploader()
+        state = str(request.args.get("state") or "")
+        ok = uploader.complete_auth_callback(request.url, state=state)
+        if ok:
+                return """
+<!doctype html>
+<html><head><meta charset="utf-8"><title>YouTube Connected</title></head>
+<body style="font-family:Arial,sans-serif;padding:24px;line-height:1.5;">
+    <h3>YouTube connected successfully.</h3>
+    <p>You can close this window and return to the app.</p>
+    <script>
+        try { window.close(); } catch (e) {}
+    </script>
+</body></html>
+"""
+
+        err = str(getattr(uploader, "last_error", "") or "OAuth callback failed")
+        return f"""
+<!doctype html>
+<html><head><meta charset=\"utf-8\"><title>YouTube OAuth Error</title></head>
+<body style=\"font-family:Arial,sans-serif;padding:24px;line-height:1.5;\">
+    <h3>Failed to connect YouTube.</h3>
+    <p>{err}</p>
+    <p>Please close this window and click \"Đăng nhập YouTube\" again.</p>
+</body></html>
+""", 400
+
+@app.route("/api/youtube_channel", methods=["GET"])
+def youtube_channel():
+    """Get authenticated YouTube channel info."""
+    uploader = _get_youtube_uploader()
+    if not uploader.credentials:
+        if not uploader.authenticate():
+            return jsonify({"ok": False, "error": "Not authenticated"}), 401
+    
+    channel = uploader.get_channel_info()
+    if channel:
+        return jsonify({"ok": True, "channel": channel})
+    return jsonify({"ok": False, "error": "Failed to fetch channel"}), 500
+
+@app.route("/api/youtube_upload", methods=["POST"])
+def youtube_upload():
+    """Upload video to YouTube."""
+    from pathlib import Path as _Path
+    import json as _j
+    from flask import Response, stream_with_context
+    
+    data = request.json or {}
+    video_path = str(data.get("video_path") or "").strip()
+    title = str(data.get("title") or "").strip()
+    description = str(data.get("description") or "").strip()
+    tags = data.get("tags") or []
+    privacy_status = str(data.get("privacy_status") or "private").strip().lower()
+
+    if not title and video_path:
+        title = _Path(video_path).stem
+    
+    if not video_path or not title:
+        return jsonify({"ok": False, "error": "Missing video_path or title"}), 400
+    
+    video_path = _Path(video_path)
+    if not video_path.exists():
+        return jsonify({"ok": False, "error": f"Video not found: {video_path}"}), 404
+    
+    uploader = _get_youtube_uploader()
+    if not uploader.credentials:
+        if not uploader.authenticate():
+            return jsonify({"ok": False, "error": "Not authenticated with YouTube"}), 401
+    
+    def generate():
+        def send(**kw):
+            return _j.dumps(kw, ensure_ascii=False) + "\n"
+        
+        def on_progress(status):
+            yield send(**status)
+        
+        try:
+            yield send(log="[YouTube] Bắt đầu upload...", level="info")
+            result = uploader.upload_video(
+                video_path=video_path,
+                title=title,
+                description=description,
+                tags=tags,
+                privacy_status=privacy_status,
+                on_progress=on_progress
+            )
+            
+            if result:
+                yield send(
+                    log=f"[YouTube] ✓ Upload thành công! {result['url']}",
+                    level="success",
+                    video_id=result['id'],
+                    url=result['url']
+                )
+            else:
+                yield send(log="[YouTube] ✗ Upload thất bại", level="error")
+        except Exception as e:
+            yield send(log=f"[YouTube] ✗ Lỗi: {str(e)}", level="error")
+    
+    return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
+
+@app.route("/api/youtube_logout", methods=["POST"])
+def youtube_logout():
+    """Logout from YouTube (revoke token)."""
+    uploader = _get_youtube_uploader()
+    if uploader.revoke_auth():
+        return jsonify({"ok": True, "message": "Logged out from YouTube"})
+    return jsonify({"ok": False, "error": "Failed to logout"}), 500
+
+
 if __name__ == "__main__":
     import webbrowser, time
+    APP_HOST = "127.0.0.1"
+    APP_PORT = 8080
     threading.Thread(target=_preload_whisper_model, daemon=True).start()
-    threading.Timer(1.2, lambda: webbrowser.open("http://localhost:5003")).start()
-    socketio.run(app, host="0.0.0.0", port=5003, debug=False)
+    threading.Timer(1.2, lambda: webbrowser.open(f"http://localhost:{APP_PORT}")).start()
+    socketio.run(app, host=APP_HOST, port=APP_PORT, debug=False)
