@@ -22,7 +22,8 @@ function toggleSidebar() {
 /* ── Video Processing ────────────────────────────────────────────────────── */
 function startProcessVideo() {
   const videoPath = document.getElementById('proc-video')?.value?.trim();
-  if (!videoPath) { alert('Vui lòng nhập đường dẫn file video'); return; }
+  const videoUrl = document.getElementById('proc-url')?.value?.trim();
+  if (!videoPath && !videoUrl) { alert('Vui lòng nhập đường dẫn file video hoặc URL video'); return; }
 
   const btn = document.getElementById('btn-proc');
   if (btn) { btn.disabled = true; btn.textContent = 'Đang xử lý...'; }
@@ -34,6 +35,7 @@ function startProcessVideo() {
 
   const payload = {
     video_path:       videoPath,
+    video_url:        videoUrl || '',
     out_dir:          document.getElementById('proc-out')?.value?.trim() || '',
     model:            document.getElementById('proc-model')?.value || 'base',
     language:         document.getElementById('proc-lang')?.value || 'zh',
