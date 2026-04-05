@@ -38,6 +38,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "transcript": {
         "enabled": False,
         "model": "gpt-4o-mini-transcribe",
+        "groq_api_key": "",
+        "groq_model": "whisper-large-v3-turbo",
+        "groq_max_mb": 25,
         "output_dir": "",
         "response_formats": ["txt", "json"],
         "api_url": "https://api.openai.com/v1/audio/transcriptions",
@@ -56,7 +59,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "deepseek_key": "",
         "openai_key": "",
         "hf_token": "",
-        "preferred_provider": "auto",
+        "preferred_provider": "deepseek",
         "naming_enabled": False,
     },
     "video_process": {

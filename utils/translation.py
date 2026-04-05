@@ -12,7 +12,7 @@ def _normalize_provider_name(name: str) -> str:
     normalized = str(name).strip().lower()
     if normalized in {"hf", "huggingface"}:
         return "huggingface"
-    if normalized in {"deepseek", "openai", "google", "auto"}:
+    if normalized in {"deepseek", "openai", "google", "groq", "auto"}:
         return normalized
     return "auto"
 
@@ -70,6 +70,8 @@ def get_translation_providers(trans_cfg: Dict) -> List[str]:
     providers = []
     if (trans_cfg or {}).get("deepseek_key"):
         providers.append("deepseek")
+    if (trans_cfg or {}).get("groq_key"):
+        providers.append("groq")
     if (trans_cfg or {}).get("openai_key"):
         providers.append("openai")
     if (trans_cfg or {}).get("hf_token"):
@@ -106,6 +108,8 @@ def translate_texts(
     cfg = trans_cfg or {}
     deepseek_key = cfg.get("deepseek_key", "") or ""
     openai_key = cfg.get("openai_key", "") or ""
+    groq_key = cfg.get("groq_key", "") or ""
+    groq_model = cfg.get("groq_model", "llama-3.1-8b-instant") or "llama-3.1-8b-instant"
     hf_token = cfg.get("hf_token", "") or ""
 
     provider_order = build_provider_order(cfg, preferred_provider)
@@ -139,6 +143,16 @@ def translate_texts(
                 )
                 if any(result):
                     return _rebuild(result), "openai"
+
+            if provider == "groq" and groq_key:
+                result = _llm_translate(
+                    source_texts,
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    groq_key,
+                    groq_model,
+                )
+                if any(result):
+                    return _rebuild(result), "groq"
 
             if provider == "huggingface" and hf_token:
                 hf_endpoints = [

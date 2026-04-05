@@ -1,5 +1,5 @@
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 from typing import Optional
 
 
@@ -33,10 +33,10 @@ def parse_url_type(url: str) -> Optional[str]:
 
     parsed = urlparse(url)
     path = parsed.path
-    query = parsed.query or ''
+    qs = parse_qs(parsed.query or '')
 
-    # Some share pages (e.g. /jingxuan) carry the real video id in query params.
-    if any(k in query for k in ('modal_id=', 'item_id=', 'group_id=', 'aweme_id=')):
+    # Some Douyin pages like /jingxuan carry the video id in query params.
+    if any(((qs.get(k) or [''])[0].isdigit()) for k in ('modal_id', 'item_id', 'group_id', 'aweme_id')):
         return 'video'
 
     if '/video/' in path:

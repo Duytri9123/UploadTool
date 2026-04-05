@@ -5,8 +5,13 @@
             <div class="card">
               <div class="card-header"><span class="card-title" data-i18n="lbl_process_settings">Cai dat xu ly video</span></div>
               <div class="field">
-                <label data-i18n="lbl_video_file">File video</label>
-                <input type="text" id="proc-video" placeholder="./Downloaded/.../video.mp4">
+                <label data-i18n="lbl_import_file">Import file</label>
+                <div class="flex-center gap-8">
+                  <input type="text" id="proc-video" placeholder="./Downloaded/.../video.mp4" readonly style="flex:1">
+                  <button class="btn btn-secondary btn-sm" type="button" onclick="document.getElementById('proc-file')?.click()" data-i18n="btn_import_file">Import</button>
+                  <input type="file" id="proc-file" accept="video/*" style="display:none">
+                </div>
+                <div class="text-xs text-muted" id="proc-file-name">--</div>
               </div>
               <div class="field">
                 <label data-i18n="lbl_video_url">URL video (tai va xu ly)</label>
@@ -16,6 +21,15 @@
                 <label data-i18n="lbl_output_dir">Thu muc xuat</label>
                 <input type="text" id="proc-out" placeholder="De trong = cung thu muc video">
               </div>
+            </div>
+
+            <div class="btn-group mb-12" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+              <button class="btn btn-primary" type="button" id="proc-tab-ai" onclick="setProcessMode('ai')" data-i18n="lbl_process_mode_ai">Xử lý AI</button>
+              <button class="btn btn-secondary" type="button" id="proc-tab-model" onclick="setProcessMode('model')" data-i18n="lbl_process_mode_model">Xử lý mô hình</button>
+            </div>
+
+            <div class="card" id="proc-model-panel">
+              <div class="card-header"><span class="card-title" data-i18n="lbl_model_settings">Mô hình xử lý</span></div>
               <div class="grid-2">
                 <div class="field">
                   <label data-i18n="lbl_model">Mo hinh Whisper</label>
@@ -37,33 +51,77 @@
                   </select>
                 </div>
               </div>
+              <div class="grid-2" style="margin-top:10px;">
+                <div class="field">
+                  <label data-i18n="lbl_transcribe_provider">Phiên âm bằng</label>
+                  <select id="proc-transcribe-provider-model">
+                    <option value="model" selected>Whisper model local</option>
+                    <option value="groq">Groq Whisper API</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label data-i18n="lbl_translate_provider">Tạo phụ đề bằng</label>
+                  <select id="proc-trans-provider-model">
+                    <option value="deepseek" selected>DeepSeek</option>
+                    <option value="groq">Groq</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="huggingface">HuggingFace</option>
+                    <option value="google">Google</option>
+                    <option value="auto">Auto</option>
+                  </select>
+                </div>
+              </div>
             </div>
 
+            <div id="proc-ai-panel">
+            <div class="card">
+              <div class="card-header"><span class="card-title" data-i18n="lbl_process_mode_ai">Xử lý AI</span></div>
+              <div class="grid-2">
+                <div class="field">
+                  <label data-i18n="lbl_transcribe_provider">Phiên âm bằng</label>
+                  <select id="proc-transcribe-provider-ai">
+                    <option value="groq" selected>Groq Whisper API</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label data-i18n="lbl_translate_provider">Tạo phụ đề bằng</label>
+                  <select id="proc-trans-provider-ai">
+                    <option value="deepseek" selected>DeepSeek</option>
+                    <option value="groq">Groq</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="huggingface">HuggingFace</option>
+                    <option value="google">Google</option>
+                    <option value="auto">Auto</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+            </div>
             <!-- Subtitle options -->
             <div class="card">
               <div class="card-header">
-                <span class="card-title" data-i18n="lbl_subtitle_opts">Phu de</span>
+                <span class="card-title" data-i18n="lbl_subtitle_opts">Phụ đề & dịch</span>
                 <div class="card-actions">
                   <label class="toggle-wrap">
                     <input type="checkbox" class="toggle-input" id="proc-burn" checked>
                     <div class="toggle"></div>
-                    <span class="toggle-label text-sm" data-i18n="lbl_burn_subs">Burn phu de</span>
+                    <span class="toggle-label text-sm" data-i18n="lbl_burn_subs">Ghi phụ đề lên video</span>
                   </label>
                 </div>
               </div>
               <div id="proc-burn-opts">
-                <div class="check-grid mb-12">
+                <div class="check-grid mb-12" style="grid-template-columns:repeat(3,minmax(0,1fr));">
                   <label class="check-item">
                     <input type="checkbox" id="proc-blur" checked>
                     <span data-i18n="lbl_blur_original">Lam mo text goc</span>
                   </label>
                   <label class="check-item">
                     <input type="checkbox" id="proc-translate-subs">
-                    <span data-i18n="lbl_translate_subs">Dich phu de sang VI</span>
+                    <span data-i18n="lbl_translate_subs">Tạo bản dịch tiếng Việt</span>
                   </label>
                   <label class="check-item">
                     <input type="checkbox" id="proc-burn-vi">
-                    <span data-i18n="lbl_burn_vi_subs">Burn phu de tieng Viet</span>
+                    <span data-i18n="lbl_burn_vi_subs">Ghi phụ đề tiếng Việt</span>
                   </label>
                 </div>
                 <div class="grid-2">
@@ -96,13 +154,10 @@
                     <input type="number" id="proc-margin-v" min="0" max="100" value="30">
                   </div>
                   <div class="field">
-                    <label data-i18n="lbl_translate_provider">Provider dich</label>
-                    <select id="proc-trans-provider">
-                      <option value="auto">Auto</option>
-                      <option value="deepseek">DeepSeek</option>
-                      <option value="openai">OpenAI</option>
-                      <option value="huggingface">HuggingFace</option>
-                      <option value="google">Google</option>
+                    <label data-i18n="lbl_subtitle_position">Vị trí phụ đề</label>
+                    <select id="proc-sub-pos">
+                      <option value="bottom" selected>Dưới</option>
+                      <option value="top">Trên</option>
                     </select>
                   </div>
                 </div>
@@ -112,7 +167,7 @@
             <!-- Voice conversion -->
             <div class="card">
               <div class="card-header">
-                <span class="card-title" data-i18n="lbl_voice_convert">Doi giong ZH to VI</span>
+                <span class="card-title" data-i18n="lbl_voice_convert">Đổi giọng tiếng Việt</span>
                 <div class="card-actions">
                   <label class="toggle-wrap">
                     <input type="checkbox" class="toggle-input" id="proc-voice">

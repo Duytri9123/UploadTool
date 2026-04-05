@@ -20,9 +20,45 @@ function toggleSidebar() {
 }
 
 /* ── Video Processing ────────────────────────────────────────────────────── */
+window._procMode = localStorage.getItem('proc_mode') || 'ai';
+window._procSelectedFile = null;
+
+function setProcessMode(mode) {
+  window._procMode = mode === 'model' ? 'model' : 'ai';
+  localStorage.setItem('proc_mode', window._procMode);
+
+  const aiPanel = document.getElementById('proc-ai-panel');
+  const modelPanel = document.getElementById('proc-model-panel');
+  const aiBtn = document.getElementById('proc-tab-ai');
+  const modelBtn = document.getElementById('proc-tab-model');
+  const isAi = window._procMode === 'ai';
+
+  if (aiPanel) aiPanel.style.display = isAi ? 'block' : 'none';
+  if (modelPanel) modelPanel.style.display = isAi ? 'none' : 'block';
+  if (aiBtn) {
+    aiBtn.classList.toggle('btn-primary', isAi);
+    aiBtn.classList.toggle('btn-secondary', !isAi);
+  }
+  if (modelBtn) {
+    modelBtn.classList.toggle('btn-primary', !isAi);
+    modelBtn.classList.toggle('btn-secondary', isAi);
+  }
+}
+
+function _getProcessProvider(kind) {
+  const isModel = (window._procMode || 'ai') === 'model';
+  const transcribeId = isModel ? 'proc-transcribe-provider-model' : 'proc-transcribe-provider-ai';
+  const translateId = isModel ? 'proc-trans-provider-model' : 'proc-trans-provider-ai';
+  if (kind === 'transcribe') {
+    return document.getElementById(transcribeId)?.value || (isModel ? 'model' : 'groq');
+  }
+  return document.getElementById(translateId)?.value || 'deepseek';
+}
+
 function startProcessVideo() {
   const videoPath = document.getElementById('proc-video')?.value?.trim();
   const videoUrl = document.getElementById('proc-url')?.value?.trim();
+  const selectedFile = window._procSelectedFile || document.getElementById('proc-file')?.files?.[0] || null;
   if (!videoPath && !videoUrl) { alert('Vui lòng nhập đường dẫn file video hoặc URL video'); return; }
 
   const btn = document.getElementById('btn-proc');
@@ -33,7 +69,7 @@ function startProcessVideo() {
   if (logBox) logBox.innerHTML = '';
   _setProcProgress(0, 'Bắt đầu...');
 
-  const payload = {
+  const baseFields = {
     video_path:       videoPath,
     video_url:        videoUrl || '',
     out_dir:          document.getElementById('proc-out')?.value?.trim() || '',
@@ -46,20 +82,23 @@ function startProcessVideo() {
     font_size:        parseInt(document.getElementById('proc-font-size')?.value || '18'),
     font_color:       document.getElementById('proc-font-color')?.value || 'white',
     margin_v:         parseInt(document.getElementById('proc-margin-v')?.value || '30'),
+    subtitle_position: document.getElementById('proc-sub-pos')?.value || 'bottom',
     translate_subs:   document.getElementById('proc-translate-subs')?.checked ?? false,
     burn_vi_subs:     document.getElementById('proc-burn-vi')?.checked ?? false,
-    translate_provider: document.getElementById('proc-trans-provider')?.value || 'auto',
+    transcribe_provider: _getProcessProvider('transcribe'),
+    translate_provider: _getProcessProvider('translate'),
     voice_convert:    document.getElementById('proc-voice')?.checked ?? false,
     tts_engine:       document.getElementById('proc-tts-engine')?.value || 'edge-tts',
     tts_voice:        document.getElementById('proc-tts-voice')?.value || 'vi-VN-HoaiMyNeural',
     keep_bg_music:    document.getElementById('proc-keep-bg')?.checked ?? true,
     bg_volume:        parseFloat(document.getElementById('proc-bg-vol')?.value || '0.15'),
+    process_mode:     window._procMode || 'ai',
   };
 
-  fetch('/api/process_video', {
+  const doRequest = (body, isFormData) => fetch('/api/process_video', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    headers: isFormData ? {} : { 'Content-Type': 'application/json' },
+    body,
   }).then(res => {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -85,6 +124,16 @@ function startProcessVideo() {
     _appendProcLog('Lỗi kết nối: ' + err, 'error');
     if (btn) { btn.disabled = false; btn.textContent = 'Xử lý Video'; }
   });
+
+  if (selectedFile) {
+    const form = new FormData();
+    form.append('video_file', selectedFile);
+    Object.entries(baseFields).forEach(([key, value]) => form.append(key, String(value ?? '')));
+    doRequest(form, true);
+    return;
+  }
+
+  doRequest(JSON.stringify(baseFields), false);
 }
 
 function _appendProcLog(msg, level) {
@@ -113,6 +162,17 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.key === 'Enter') addManualUrl();
   });
   _initUserPageListeners();
+
+  document.getElementById('proc-file')?.addEventListener('change', function() {
+    const file = this.files && this.files[0] ? this.files[0] : null;
+    window._procSelectedFile = file;
+    const pathBox = document.getElementById('proc-video');
+    const label = document.getElementById('proc-file-name');
+    if (pathBox) pathBox.value = file ? file.name : '';
+    if (label) label.textContent = file ? file.name : '--';
+  });
+
+  setProcessMode(window._procMode || 'ai');
 
   // Toggle voice options visibility
   document.getElementById('proc-voice')?.addEventListener('change', function() {

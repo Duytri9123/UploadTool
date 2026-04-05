@@ -657,6 +657,8 @@ def handle_download(data):
 
             # Optional one-time post-process overrides from Download page.
             vp_cfg = dict(config.get("video_process") or {})
+            tr_cfg = dict(config.get("translation") or {})
+            transcript_cfg = dict(config.get("transcript") or {})
             pp_enabled = bool(post_process.get("enabled", True))
             if pp_enabled:
                 vp_cfg.update({
@@ -667,11 +669,26 @@ def handle_download(data):
                     "voice_convert": bool(post_process.get("voice_convert", True)),
                     "keep_bg_music": bool(post_process.get("keep_bg_music", False)),
                 })
+                translate_provider = str(post_process.get("translate_provider") or "").strip()
+                if translate_provider:
+                    if translate_provider == "auto":
+                        translate_provider = "deepseek"
+                    tr_cfg["preferred_provider"] = translate_provider
+                groq_api_key = str(post_process.get("groq_api_key") or "").strip()
+                groq_model = str(post_process.get("groq_model") or "").strip()
+                if groq_api_key:
+                    transcript_cfg["groq_api_key"] = groq_api_key
+                if groq_model:
+                    transcript_cfg["groq_model"] = groq_model
             elif post_process:
                 vp_cfg.update({"enabled": False})
 
             if vp_cfg:
                 config.update(video_process=vp_cfg)
+            if tr_cfg:
+                config.update(translation=tr_cfg)
+            if transcript_cfg:
+                config.update(transcript=transcript_cfg)
 
             if not config.validate():
                 prog.print_error("Invalid config"); return
@@ -868,9 +885,27 @@ def transcribe():
 
 @app.route("/api/process_video", methods=["POST"])
 def process_video():
-    data = request.json or {}
+    import tempfile
+    from pathlib import Path as _Path
     import json as _j
     from flask import Response, stream_with_context
+
+    data = {}
+    if request.form:
+        data.update(request.form.to_dict(flat=True))
+    if request.is_json:
+        data.update(request.get_json(silent=True) or {})
+
+    uploaded_file = request.files.get("video_file") if request.files else None
+    if uploaded_file and uploaded_file.filename:
+        from utils.validators import sanitize_filename
+        upload_dir = _Path(tempfile.mkdtemp(prefix="proc_upload_"))
+        original_name = _Path(uploaded_file.filename).name
+        safe_name = sanitize_filename(_Path(original_name).stem) + _Path(original_name).suffix
+        saved_path = upload_dir / safe_name
+        uploaded_file.save(saved_path)
+        data["video_path"] = str(saved_path)
+        data["video_file_name"] = original_name
 
     def generate():
         from config import ConfigLoader
@@ -898,12 +933,16 @@ def process_video():
 
             def _extract_aweme_id(url: str, parsed_url: dict | None) -> str:
                 if parsed_url:
-                    return str(parsed_url.get("aweme_id") or "").strip()
-                qs = parse_qs(urlparse(url).query)
+                    aid = str(parsed_url.get("aweme_id") or "").strip()
+                    if aid:
+                        return aid
+
+                qs = parse_qs(urlparse(url).query or "")
                 for key in ("modal_id", "item_id", "group_id", "aweme_id"):
-                    val = (qs.get(key) or [""])[0]
+                    val = str((qs.get(key) or [""])[0]).strip()
                     if val.isdigit():
                         return val
+
                 m = re.search(r"/(?:video|note|gallery|slides|share/video)/(\d{15,20})", url)
                 if m:
                     return m.group(1)
@@ -921,7 +960,7 @@ def process_video():
                     raise RuntimeError("URL is empty")
 
                 resolved_url = normalized_url
-                if "douyin.com" in resolved_url:
+                if "v.douyin.com" in resolved_url:
                     redirected = await api.resolve_short_url(resolved_url)
                     if redirected:
                         resolved_url = redirected
@@ -929,13 +968,10 @@ def process_video():
                 parsed = URLParser.parse(resolved_url)
                 aweme_id = _extract_aweme_id(resolved_url, parsed)
                 if not aweme_id:
-                    # Some redirects (e.g. jingxuan) may drop query parameters like modal_id.
-                    # Fallback to the original input URL to keep video id extraction robust.
+                    # Some redirects may drop modal_id/item_id query params.
                     aweme_id = _extract_aweme_id(normalized_url, URLParser.parse(normalized_url))
                 if not aweme_id:
-                    raise RuntimeError(
-                        "Invalid video URL. Please paste a specific Douyin post link (e.g. /video/{id} or shared short link), not homepage."
-                    )
+                    raise RuntimeError("Invalid video URL. Please use a specific Douyin post link.")
 
                 if parsed and parsed.get("type") not in ("video", "gallery") and not aweme_id:
                     raise RuntimeError("URL is not a video post")

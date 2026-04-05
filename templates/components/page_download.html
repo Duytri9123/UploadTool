@@ -21,19 +21,40 @@
           <div>
             <div class="card">
               <div class="card-header"><span class="card-title" data-i18n="lbl_dl_control">Điều khiển tải xuống</span></div>
-              <div class="check-grid mb-12">
+              <div class="check-grid mb-12" style="grid-template-columns:repeat(3,minmax(0,1fr));">
                 <label class="check-item">
-                  <input type="checkbox" id="dl-vp-enabled" checked>
-                  <span data-i18n="lbl_dl_post_process">Xử lý video sau khi tải</span>
+                  <input type="checkbox" id="dl-vp-enabled">
+                  <span data-i18n="lbl_dl_toggle_process">Xử lý video</span>
                 </label>
                 <label class="check-item">
                   <input type="checkbox" id="dl-vp-burn-vi">
-                  <span data-i18n="lbl_dl_burn_vi">Phụ đề tiếng Việt</span>
+                  <span data-i18n="lbl_dl_toggle_subtitle">Chèn phụ đề</span>
                 </label>
                 <label class="check-item">
-                  <input type="checkbox" id="dl-vp-voice" checked>
-                  <span data-i18n="lbl_dl_voice_vi">Giọng nói tiếng Việt</span>
+                  <input type="checkbox" id="dl-vp-voice">
+                  <span data-i18n="lbl_dl_toggle_voice">Tạo giọng nói</span>
                 </label>
+              </div>
+              <div class="field" id="dl-translate-wrap">
+                <label data-i18n="lbl_preferred_provider">Tạo phụ đề bằng</label>
+                <select id="dl-translate-provider">
+                  <option value="deepseek" selected>DeepSeek</option>
+                  <option value="groq">Groq</option>
+                  <option value="auto">Auto (Fallback)</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="huggingface">HuggingFace</option>
+                  <option value="google">Google Translate</option>
+                </select>
+              </div>
+              <div class="grid-2" style="display:none" aria-hidden="true">
+                <div class="field">
+                  <label data-i18n="lbl_groq_api_key">Groq API Key cho phiên âm video</label>
+                  <input type="password" id="dl-groq-api-key" placeholder="gsk_...">
+                </div>
+                <div class="field">
+                  <label data-i18n="lbl_groq_model">Mô hình Groq Whisper</label>
+                  <input type="text" id="dl-groq-model" value="whisper-large-v3-turbo" placeholder="whisper-large-v3-turbo">
+                </div>
               </div>
               <button class="btn btn-primary" id="btn-dl" onclick="startQueueDownload()" style="width:100%;justify-content:center;margin-bottom:14px" data-i18n="btn_start_dl">
                 Bắt đầu tải
@@ -47,7 +68,7 @@
                 </div>
                 <div class="progress-info text-muted" id="lbl-download">--</div>
                 <div class="progress-row mt-8">
-                  <span class="progress-label" data-i18n="lbl_dl_burn_vi">Phụ đề tiếng Việt</span>
+                  <span class="progress-label" data-i18n="lbl_dl_burn_vi">Chèn phụ đề tiếng Việt lên video</span>
                   <div class="progress-bar-wrap"><div class="progress-bar pb-step" id="pb-subtitle"></div></div>
                   <span class="progress-pct" id="pb-subtitle-pct">0%</span>
                 </div>

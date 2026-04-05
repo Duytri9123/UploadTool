@@ -88,7 +88,82 @@ def _parse_srt(srt_path: Path) -> list[dict]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# FasterWhisperTranscriber
+# GroqWhisperTranscriber  (default — cloud API, much faster than local CPU)
+# ══════════════════════════════════════════════════════════════════════════════
+_GROQ_MODEL   = "whisper-large-v3-turbo"
+_GROQ_MAX_MB  = 25  # Groq free tier limit
+
+
+class GroqWhisperTranscriber:
+    """Speech-to-text via Groq Whisper API (cloud, fast)."""
+
+    def __init__(self, language: str = "zh", api_key: str = "", model: str = _GROQ_MODEL, max_mb: int = _GROQ_MAX_MB):
+        self.language = language
+        self.api_key = (api_key or "").strip()
+        self.model = str(model or _GROQ_MODEL).strip() or _GROQ_MODEL
+        try:
+            self.max_mb = int(max_mb)
+        except Exception:
+            self.max_mb = _GROQ_MAX_MB
+
+    def transcribe(self, video_path: Path, ffmpeg: str, out_srt: Path) -> list[dict]:
+        import httpx
+
+        video_path = Path(video_path)
+        out_srt    = Path(out_srt)
+
+        with tempfile.TemporaryDirectory(prefix="groq_whisper_") as tmpdir:
+            audio_path = Path(tmpdir) / "audio.mp3"
+            ok, err = run_ffmpeg([
+                ffmpeg, "-i", str(video_path),
+                "-vn", "-acodec", "libmp3lame", "-ar", "16000", "-ac", "1", "-q:a", "5",
+                str(audio_path), "-y", "-loglevel", "error"
+            ])
+            if not ok or not audio_path.exists():
+                raise RuntimeError(f"Audio extraction failed: {err}")
+
+            size_mb = audio_path.stat().st_size / (1024 * 1024)
+            if size_mb > self.max_mb:
+                raise RuntimeError(f"Audio too large for Groq API: {size_mb:.1f}MB > {self.max_mb}MB")
+
+            if not self.api_key:
+                raise RuntimeError("Missing GROQ_API_KEY (set env GROQ_API_KEY or config transcript.groq_api_key)")
+
+            with open(audio_path, "rb") as f:
+                response = httpx.post(
+                    "https://api.groq.com/openai/v1/audio/transcriptions",
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    files={"file": ("audio.mp3", f, "audio/mpeg")},
+                    data={
+                        "model": self.model,
+                        "language": self.language,
+                        "response_format": "verbose_json",
+                        "timestamp_granularities[]": "segment",
+                    },
+                    timeout=120,
+                )
+
+            if response.status_code != 200:
+                raise RuntimeError(f"Groq API error {response.status_code}: {response.text}")
+
+            result = response.json()
+            segments = [
+                {"start": seg["start"], "end": seg["end"], "text": seg["text"].strip()}
+                for seg in result.get("segments", [])
+                if seg.get("text", "").strip()
+            ]
+
+        srt_lines = []
+        for i, seg in enumerate(segments, 1):
+            srt_lines.append(
+                f"{i}\n{_fmt_srt_time(seg['start'])} --> {_fmt_srt_time(seg['end'])}\n{seg['text']}\n"
+            )
+        out_srt.write_text("\n".join(srt_lines), encoding="utf-8")
+        return segments
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FasterWhisperTranscriber  (fallback — local CPU)
 # ══════════════════════════════════════════════════════════════════════════════
 _whisper_model_cache: dict = {}  # {model_name: WhisperModel} — keep in memory
 
@@ -103,9 +178,17 @@ class FasterWhisperTranscriber:
         # Reuse cached model to avoid reloading from disk on every call
         if model_name not in _whisper_model_cache:
             import os
+            import multiprocessing
             os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
             from faster_whisper import WhisperModel  # lazy import
-            _whisper_model_cache[model_name] = WhisperModel(model_name, device="cpu", compute_type="int8")
+            cpu_threads = min(multiprocessing.cpu_count(), 8)
+            _whisper_model_cache[model_name] = WhisperModel(
+                model_name,
+                device="cpu",
+                compute_type="int8",
+                cpu_threads=cpu_threads,
+                num_workers=2,
+            )
         self._model = _whisper_model_cache[model_name]
 
     def transcribe(self, video_path: Path, ffmpeg: str, out_srt: Path) -> list[dict]:
@@ -130,6 +213,8 @@ class FasterWhisperTranscriber:
                 str(audio_path),
                 language=self.language,
                 vad_filter=self.use_vad,
+                beam_size=1,
+                vad_parameters={"min_silence_duration_ms": 500},
             )
             segments = [
                 {"start": seg.start, "end": seg.end, "text": seg.text.strip()}
@@ -221,6 +306,7 @@ def burn_subtitles(
     outline_color: str = "black",
     outline_width: int = 2,
     margin_v: int = 30,
+    subtitle_position: str = "bottom",
 ) -> tuple[bool, str]:
     """
     Burn SRT subtitles into video.
@@ -249,13 +335,14 @@ def burn_subtitles(
             srt_esc = srt_esc[0] + "\\:" + srt_esc[2:]
 
         # subtitle ASS style
+        alignment = "8" if str(subtitle_position).lower() == "top" else "2"
         sub_style = (
             f"FontSize={font_size},"
             f"PrimaryColour=&H00{_hex_color(font_color)},"
             f"OutlineColour=&H00{_hex_color(outline_color)},"
             f"Outline={outline_width},"
             f"MarginV={margin_v},"
-            f"Alignment=2"
+            f"Alignment={alignment}"
         )
 
         if blur_original and blur_zone != "none":
@@ -691,41 +778,46 @@ def process_video_full(data: dict) -> Generator[str, None, None]:
     do_burn_vi   = data.get("burn_vi_subs", True)
     model_name = data.get("model", "base")
     language = data.get("language", "zh")
+    process_mode = str(data.get("process_mode", "ai") or "ai").strip().lower()
+    transcribe_provider = str(data.get("transcribe_provider", "") or "").strip().lower()
+    if not transcribe_provider:
+        transcribe_provider = "model" if process_mode == "model" else "groq"
 
     yield send(log=f"Processing: {video_path.name}", level="info")
     yield send(overall=5, overall_lbl="Starting...")
 
     # ── Step 1: Transcribe ────────────────────────────────────────────────────
-    yield send(log=f"Loading faster-whisper model: {model_name}...", level="info")
-    yield send(overall=10, overall_lbl="Loading model...")
+    if transcribe_provider == "model":
+        yield send(log=f"Transcribing via local Whisper model ({model_name})...", level="info")
+    else:
+        yield send(log="Transcribing via Groq Whisper API...", level="info")
+    yield send(overall=10, overall_lbl="Transcribing...")
 
     srt_path = out_dir / f"{stem}.srt"
     segments = []
 
     try:
-        # Load model in a thread so we can yield heartbeats while waiting
-        import threading as _threading
-        _transcriber_box = [None]
-        _transcriber_err = [None]
-        def _load_transcriber():
-            try:
-                _transcriber_box[0] = FasterWhisperTranscriber(model_name, language, use_vad=True)
-            except Exception as e:
-                _transcriber_err[0] = e
-        t = _threading.Thread(target=_load_transcriber, daemon=True)
-        t.start()
-        _waited = 0
-        while t.is_alive():
-            import time as _time
-            _time.sleep(2)
-            _waited += 2
-            yield send(log=f"Loading model... ({_waited}s)", level="info")
-        t.join()
-        if _transcriber_err[0]:
-            raise _transcriber_err[0]
-        transcriber = _transcriber_box[0]
-        yield send(log="Model loaded, transcribing...", level="info")
+        import yaml
+        cfg_file = Path(__file__).parent.parent / "config.yml"
+        cfg_raw = yaml.safe_load(cfg_file.read_text(encoding="utf-8")) if cfg_file.exists() else {}
+        tr_cfg = cfg_raw.get("transcript", {}) or {}
+        if transcribe_provider == "model":
+            transcriber = FasterWhisperTranscriber(model_name, language, use_vad=True)
+        else:
+            groq_key = (
+                str(data.get("groq_api_key") or "").strip()
+                or os.getenv("GROQ_API_KEY", "").strip()
+                or str(tr_cfg.get("groq_api_key") or "").strip()
+            )
+            groq_model = str(data.get("groq_model") or tr_cfg.get("groq_model") or _GROQ_MODEL).strip() or _GROQ_MODEL
+            groq_max_mb = int(data.get("groq_max_mb") or tr_cfg.get("groq_max_mb") or _GROQ_MAX_MB)
 
+            transcriber = GroqWhisperTranscriber(
+                language=language,
+                api_key=groq_key,
+                model=groq_model,
+                max_mb=groq_max_mb,
+            )
         segments = transcriber.transcribe(video_path, ffmpeg, srt_path)
         if not segments:
             yield send(log="No speech detected in video", level="warning")
@@ -746,11 +838,27 @@ def process_video_full(data: dict) -> Generator[str, None, None]:
         yield send(overall=45, overall_lbl="Translating...")
         try:
             from utils.translation import BatchTranslator
-            import yaml
-            cfg_file = Path(__file__).parent.parent / "config.yml"
-            cfg_raw = yaml.safe_load(cfg_file.read_text(encoding="utf-8")) if cfg_file.exists() else {}
             trans_cfg = cfg_raw.get("translation", {})
-            provider = data.get("translate_provider", "auto")
+            if not trans_cfg.get("groq_key"):
+                trans_cfg["groq_key"] = (
+                    str(data.get("groq_api_key") or "").strip()
+                    or os.getenv("GROQ_API_KEY", "").strip()
+                    or str(tr_cfg.get("groq_api_key") or "").strip()
+                )
+            if not trans_cfg.get("groq_model"):
+                trans_cfg["groq_model"] = (
+                    str(data.get("groq_model") or "").strip()
+                    or str(tr_cfg.get("groq_model") or "").strip()
+                    or "llama-3.1-8b-instant"
+                )
+            req_provider = str(data.get("translate_provider") or "").strip().lower()
+            cfg_provider = str(trans_cfg.get("preferred_provider") or "").strip().lower()
+            # Treat "auto" as unspecified so config/provider key can decide deterministically.
+            if req_provider == "auto":
+                req_provider = ""
+            if cfg_provider == "auto":
+                cfg_provider = ""
+            provider = req_provider or cfg_provider or ("deepseek" if trans_cfg.get("deepseek_key") else "auto")
             texts = [seg.get("text", "").strip() for seg in segments]
             translator = BatchTranslator(trans_cfg)
             translated_texts, used = translator.translate(texts, provider)
@@ -786,6 +894,7 @@ def process_video_full(data: dict) -> Generator[str, None, None]:
             outline_color=data.get("outline_color", "black"),
             outline_width=int(data.get("outline_width", 2)),
             margin_v=int(data.get("margin_v", 30)),
+            subtitle_position=data.get("subtitle_position", "bottom"),
         )
         if ok:
             yield send(log=f"Subtitled video saved: {burned_path.name}", level="success")

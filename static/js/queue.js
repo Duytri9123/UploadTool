@@ -8,8 +8,10 @@ function syncDownloadPostProcessControls() {
   const enabled = document.getElementById('dl-vp-enabled')?.checked !== false;
   const burn = document.getElementById('dl-vp-burn-vi');
   const voice = document.getElementById('dl-vp-voice');
+  const transWrap = document.getElementById('dl-translate-wrap');
   if (burn) burn.disabled = !enabled;
   if (voice) voice.disabled = !enabled;
+  if (transWrap) transWrap.style.display = enabled ? 'block' : 'none';
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -52,6 +54,17 @@ async function loadQueue() {
   const data = await API.get('/api/queue');
   _queue = data || [];
   renderQueue();
+  await loadQueueProcessSettings();
+}
+
+async function loadQueueProcessSettings() {
+  const cfg = await API.get('/api/config');
+  if (!cfg) return;
+
+  const tr = cfg.translation || {};
+  const set = (id, val) => { const el = document.getElementById(id); if (el && (el.value === '' || el.value == null)) el.value = val ?? ''; };
+
+  set('dl-translate-provider', tr.preferred_provider || 'deepseek');
 }
 
 function renderQueue() {
@@ -174,6 +187,7 @@ function startQueueDownload() {
   const burnVi = document.getElementById('dl-vp-burn-vi')?.checked !== false;
   const voiceVi = document.getElementById('dl-vp-voice')?.checked !== false;
   const hasPostProcess = vpEnabled && (burnVi || voiceVi);
+  const translateProvider = document.getElementById('dl-translate-provider')?.value || 'deepseek';
 
   const btn = document.getElementById('btn-dl');
   if (btn) { btn.disabled = true; btn.textContent = t('lbl_queue_running'); }
@@ -188,6 +202,7 @@ function startQueueDownload() {
       burn_vi_subs: burnVi,
       voice_convert: voiceVi,
       keep_bg_music: false,
+      translate_provider: translateProvider,
     }
   });
 }
