@@ -492,6 +492,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Publish integration
   loadPublishSettings();
   checkYouTubeAuth();
+  checkTikTokAuth();
   document.getElementById('publish-platform')?.addEventListener('change', function() {
     switchPublishPlatform(this.value || 'youtube');
   });
@@ -505,6 +506,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ── Publish Upload ─────────────────────────────────────────────────────── */
 window._publishLastOutputPath = null;
 window._ytAuthenticated = false;
+window._ttAuthenticated = false;
 window._publishPlatform = localStorage.getItem('publish_platform') || 'youtube';
 
 function loadPublishSettings() {
@@ -611,6 +613,11 @@ function _appendPublishLog(msg, level) {
   box.scrollTop = box.scrollHeight;
 }
 
+function _setPublishStatus(text) {
+  const status = document.getElementById('publish-status');
+  if (status) status.textContent = text;
+}
+
 function _toYouTubeUserHint(err) {
   const raw = String(err?.message || err || '').trim();
   const low = raw.toLowerCase();
@@ -679,7 +686,7 @@ function _setYouTubeAuthenticated(authenticated, channel) {
     if (authBtn) authBtn.style.display = 'inline-block';
     if (logoutBtn) logoutBtn.style.display = 'none';
     if (channelInfo) channelInfo.style.display = 'none';
-    if (authNeeded) authNeeded.style.display = 'block';
+    if (authNeeded) authNeeded.style.display = 'none';
     if (status) status.textContent = 'Chưa kết nối';
   }
 }
@@ -730,13 +737,153 @@ async function youtubeLogout() {
   }
 }
 
-async function uploadToYouTube(videoPath) {
+function _toTikTokUserHint(err) {
+  const raw = String(err?.message || err || '').trim();
+  const low = raw.toLowerCase();
+
+  if (low.includes('missing tiktok client_key/client_secret')) {
+    return 'Thiếu TikTok client_key/client_secret trong cấu hình upload.tiktok.';
+  }
+  if (low.includes('oauth') || low.includes('auth')) {
+    return raw || 'Không thể xác thực TikTok. Kiểm tra Client Key/Secret và Redirect URI.';
+  }
+  return raw || 'Không thể kết nối TikTok API. Kiểm tra cấu hình và thử lại.';
+}
+
+function _showTikTokError(err, prefix) {
+  const hint = _toTikTokUserHint(err);
+  const pfx = prefix || 'Lỗi kết nối TikTok';
+  toast(pfx + ': ' + hint, 'error');
+  _appendPublishLog(pfx + ': ' + hint, 'error');
+  const status = document.getElementById('publish-status');
+  if (status && (window._publishPlatform || '') === 'tiktok') status.textContent = 'Lỗi TikTok';
+}
+
+function _setTikTokAuthenticated(authenticated, account) {
+  window._ttAuthenticated = !!authenticated;
+  const authBtn = document.getElementById('btn-tt-auth');
+  const logoutBtn = document.getElementById('btn-tt-logout');
+  const accountInfo = document.getElementById('tt-account-info');
+  const authNeeded = document.getElementById('tt-auth-needed');
+
+  if (window._ttAuthenticated) {
+    if (authBtn) authBtn.style.display = 'none';
+    if (logoutBtn) logoutBtn.style.display = 'inline-block';
+    if (accountInfo) {
+      accountInfo.style.display = 'block';
+      const openid = document.getElementById('tt-account-openid');
+      const scope = document.getElementById('tt-account-scope');
+      if (openid) openid.textContent = account?.open_id || '--';
+      if (scope) scope.textContent = account?.scope || '--';
+    }
+    if (authNeeded) authNeeded.style.display = 'none';
+  } else {
+    if (authBtn) authBtn.style.display = 'inline-block';
+    if (logoutBtn) logoutBtn.style.display = 'none';
+    if (accountInfo) accountInfo.style.display = 'none';
+    if (authNeeded) authNeeded.style.display = 'block';
+  }
+}
+
+async function checkTikTokAuth() {
+  try {
+    const res = await API.get('/api/tiktok_auth');
+    if (res?.authenticated) {
+      _setTikTokAuthenticated(true, res.account || {});
+    } else {
+      _setTikTokAuthenticated(false, null);
+    }
+  } catch (e) {
+    console.warn('TikTok auth check failed:', e);
+    _setTikTokAuthenticated(false, null);
+  }
+}
+
+async function tiktokLogin() {
+  const btn = document.getElementById('btn-tt-auth');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Đang kết nối...';
+  }
+
+  try {
+    const res = await API.post('/api/tiktok_auth', {});
+    if (res?.authenticated) {
+      _setTikTokAuthenticated(true, res.account || {});
+      toast('Đã kết nối TikTok', 'success');
+    } else if (res?.auth_url) {
+      toast('Vui lòng mở link để đăng nhập TikTok', 'info');
+      const popup = window.open(res.auth_url, 'tiktok_auth', 'width=680,height=720');
+      let tries = 0;
+      const timer = setInterval(async () => {
+        tries += 1;
+        await checkTikTokAuth();
+        if (window._ttAuthenticated || (popup && popup.closed) || tries >= 60) {
+          clearInterval(timer);
+        }
+      }, 2000);
+    }
+  } catch (e) {
+    _showTikTokError(e, 'Lỗi kết nối TikTok');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Đăng nhập TikTok';
+    }
+  }
+}
+
+async function tiktokLogout() {
+  if (!confirm('Xác nhận đăng xuất TikTok?')) return;
+
+  try {
+    await API.post('/api/tiktok_logout', {});
+    _setTikTokAuthenticated(false, null);
+    toast('Đã đăng xuất TikTok', 'info');
+  } catch (e) {
+    _showTikTokError(e, 'Lỗi đăng xuất TikTok');
+  }
+}
+
+async function _publishToYouTubeManual(videoInput) {
+  const videoPath = typeof videoInput === 'string' ? videoInput.trim() : (videoInput?.name || '').trim();
+  const title = _getPublishTitle('youtube', videoPath);
+  const description = _getPublishDescription('youtube');
+  const tags = ['douyin', 'tiktok', 'video'].join(', ');
+
+  try {
+    const clip = [
+      `Title: ${title}`,
+      description ? `Description:\n${description}` : '',
+      `Tags: ${tags}`,
+    ].filter(Boolean).join('\n\n');
+    if (clip && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(clip);
+    }
+  } catch (_) {}
+
+  _setPublishStatus('Đăng YouTube thủ công');
+  _appendPublishLog('Chuyển sang chế độ đăng YouTube thủ công (không dùng OAuth API).', 'warning');
+  _appendPublishLog('Đã sao chép title/description/tags vào clipboard.', 'info');
+  if (videoPath) {
+    _appendPublishLog(`File cần đăng: ${videoPath}`, 'info');
+  }
+  _appendPublishLog('Đang mở trang upload YouTube...', 'info');
+  _appendPublishLog('Bước tiếp theo: chọn file video, dán mô tả đã copy (Ctrl+V), rồi bấm Publish.', 'info');
+  toast('Đã chuyển sang đăng thủ công. Dữ liệu đã copy clipboard.', 'info');
+  window.open('https://www.youtube.com/upload', '_blank');
+}
+
+async function uploadToYouTube(videoInput) {
   if (!window._ytAuthenticated) {
-    toast('Vui lòng đăng nhập YouTube trước', 'warning');
+    await _publishToYouTubeManual(videoInput);
     return;
   }
 
-  if (!videoPath || !videoPath.trim()) {
+  const isFileInput = typeof File !== 'undefined' && videoInput instanceof File;
+  const videoPath = isFileInput ? videoInput.name : String(videoInput || '').trim();
+
+  if (!videoPath) {
     alert('Không có video để upload');
     return;
   }
@@ -753,20 +900,34 @@ async function uploadToYouTube(videoPath) {
     logBox.style.display = 'block';
   }
 
+  _setPublishStatus('Đang đăng YouTube...');
   _appendPublishLog('Bắt đầu upload lên YouTube...', 'info');
 
   try {
-    const res = await fetch('/api/youtube_upload', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        video_path: videoPath,
-        title: title,
-        description: _getPublishDescription('youtube'),
-        tags: ['douyin', 'tiktok', 'video'],
-        privacy_status: _getPublishPrivacy('youtube'),
-      }),
-    });
+    const payload = {
+      title: title,
+      description: _getPublishDescription('youtube'),
+      tags: ['douyin', 'tiktok', 'video'],
+      privacy_status: _getPublishPrivacy('youtube'),
+    };
+
+    const requestOptions = isFileInput
+      ? (() => {
+          const form = new FormData();
+          form.append('video_file', videoInput, videoInput.name);
+          form.append('title', payload.title);
+          form.append('description', payload.description);
+          form.append('tags', JSON.stringify(payload.tags));
+          form.append('privacy_status', payload.privacy_status);
+          return { method: 'POST', body: form };
+        })()
+      : {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ video_path: videoPath, ...payload }),
+        };
+
+    const res = await fetch('/api/youtube_upload', requestOptions);
 
     if (!res.ok) {
       let msg = 'Upload thất bại';
@@ -790,23 +951,38 @@ async function uploadToYouTube(videoPath) {
         if (!line.trim()) continue;
         try {
           const data = JSON.parse(line);
+          if (data.status === 'uploading' && typeof data.pct === 'number') {
+            _appendPublishLog(`Đang upload YouTube... ${data.pct}%`, 'info');
+          }
           if (data.log) _appendPublishLog(data.log, data.level || 'info');
           if (data.status === 'success' && data.url) {
+            _setPublishStatus('Đã đăng YouTube');
             toast(`✓ Upload thành công! ${data.url}`, 'success');
           }
         } catch (_) {}
       }
     }
   } catch (e) {
+    const msg = String(e?.message || e || '').toLowerCase();
+    if (msg.includes('insecure_transport') || msg.includes('not authenticated')) {
+      await _publishToYouTubeManual(videoInput);
+      return;
+    }
+    _setPublishStatus('Lỗi YouTube');
     _appendPublishLog('✗ Lỗi: ' + e.message, 'error');
     toast('Upload thất bại: ' + e.message, 'error');
   }
 }
 
-async function publishToTikTok(videoPath) {
-  if (!videoPath || !videoPath.trim()) {
+async function publishToTikTok(videoInput) {
+  const videoPath = typeof videoInput === 'string' ? videoInput.trim() : (videoInput?.name || '').trim();
+  if (!videoPath) {
     alert('Không có video để đăng');
     return;
+  }
+
+  if (!window._ttAuthenticated) {
+    toast('Bạn chưa đăng nhập TikTok API. Vẫn mở chế độ đăng thủ công.', 'warning');
   }
 
   const title = _getPublishTitle('tiktok', videoPath);
@@ -826,9 +1002,12 @@ async function publishToTikTok(videoPath) {
     }
   } catch (_) {}
 
-  _appendPublishLog('Đã chuẩn bị caption TikTok và mở trang upload.', 'info');
+  _setPublishStatus('Đang mở TikTok...');
+  _appendPublishLog('Bắt đầu chuẩn bị TikTok...', 'info');
+  _appendPublishLog('Đã chuẩn bị caption TikTok và mở trang upload.', 'success');
   toast('Đã sao chép caption TikTok và mở trang upload', 'info');
   window.open('https://www.tiktok.com/upload?lang=vi-VN', '_blank');
+  _setPublishStatus('Đã mở TikTok');
 }
 
 async function savePublishSettings() {
@@ -864,7 +1043,7 @@ async function savePublishSettings() {
 
 async function publishSelectedPlatform() {
   const platform = window._publishPlatform || document.getElementById('publish-platform')?.value || 'youtube';
-  const videoPath = window._publishLastOutputPath || window._ytLastOutputPath || '';
+  const videoPath = window._publishLastOutputPath || window._ytLastOutputPath || window._procSelectedFile || '';
 
   if (!videoPath) {
     toast('Chưa có file đầu ra để đăng', 'warning');

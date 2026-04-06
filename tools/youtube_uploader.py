@@ -11,6 +11,9 @@ from google.oauth2.credentials import Credentials
 import googleapiclient.discovery
 import googleapiclient.errors
 
+# Local dev callback uses http://localhost. OAuthlib requires this opt-in.
+os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+
 # Scopes for YouTube API
 SCOPES = [
     'https://www.googleapis.com/auth/youtube.upload',
@@ -21,27 +24,43 @@ class YouTubeUploader:
     """Upload videos to YouTube using OAuth 2.0."""
     
     def __init__(self, client_secrets_file: str = "client_secrets.json", tokens_dir: str = ".youtube_tokens"):
-        self.client_secrets_file = Path(client_secrets_file)
-        self.tokens_dir = Path(tokens_dir)
-        self.tokens_dir.mkdir(exist_ok=True)
+        self.base_dir = Path(__file__).resolve().parent.parent
+        self.client_secrets_file = (self.base_dir / client_secrets_file).resolve()
+        self.tokens_dir = (self.base_dir / tokens_dir).resolve()
+        self.tokens_dir.mkdir(parents=True, exist_ok=True)
         self.token_file = self.tokens_dir / "youtube_token.pickle"
+        self.token_json_file = self.base_dir / "youtube_token.json"
         self.credentials = None
         self.youtube = None
         self.last_error = ""
         self._pending_flow = None
         self._pending_state = ""
+        self._pending_auth_url = ""
     
     def _load_credentials(self) -> Optional[Credentials]:
         """Load saved credentials from file."""
         if self.token_file.exists():
             with open(self.token_file, 'rb') as f:
-                return pickle.load(f)
+                creds = pickle.load(f)
+                if isinstance(creds, Credentials):
+                    return creds
+
+        if self.token_json_file.exists():
+            try:
+                return Credentials.from_authorized_user_file(str(self.token_json_file), SCOPES)
+            except Exception:
+                pass
         return None
     
     def _save_credentials(self, credentials: Credentials):
         """Save credentials to file."""
         with open(self.token_file, 'wb') as f:
             pickle.dump(credentials, f)
+
+        # Keep a JSON token alongside the pickle so other tools in the workspace
+        # can reuse the same OAuth session.
+        with open(self.token_json_file, 'w', encoding='utf-8') as f:
+            f.write(credentials.to_json())
     
     def authenticate(self, force_refresh: bool = False) -> bool:
         """
@@ -71,6 +90,9 @@ class YouTubeUploader:
                 )
                 return True
 
+            if self.credentials:
+                self.last_error = "YouTube token has expired or cannot be refreshed. Please sign in again."
+
             return False
         
         except Exception as e:
@@ -85,6 +107,12 @@ class YouTubeUploader:
         """
         try:
             self.last_error = ""
+
+            # If an OAuth flow is already pending, reuse it to keep state stable
+            # while the frontend polls auth status.
+            if self._pending_flow and self._pending_state and self._pending_auth_url:
+                return self._pending_auth_url
+
             if not self.client_secrets_file.exists():
                 self.last_error = f"client_secrets.json not found at {self.client_secrets_file}"
                 return None
@@ -98,6 +126,7 @@ class YouTubeUploader:
             auth_url, state = flow.authorization_url(access_type='offline', prompt='consent')
             self._pending_flow = flow
             self._pending_state = str(state or "")
+            self._pending_auth_url = str(auth_url or "")
             return auth_url
         except Exception as e:
             self.last_error = str(e)
@@ -107,6 +136,7 @@ class YouTubeUploader:
     def complete_auth_callback(self, callback_url: str, state: str = "") -> bool:
         """Exchange OAuth callback code for tokens."""
         try:
+            os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
             self.last_error = ""
             if not self._pending_flow:
                 self.last_error = "OAuth state expired. Please click Đăng nhập YouTube again."
@@ -126,6 +156,7 @@ class YouTubeUploader:
             self.youtube = googleapiclient.discovery.build('youtube', 'v3', credentials=self.credentials)
             self._pending_flow = None
             self._pending_state = ""
+            self._pending_auth_url = ""
             return True
         except Exception as e:
             self.last_error = str(e)
@@ -259,6 +290,9 @@ class YouTubeUploader:
                 self.token_file.unlink()
             self.credentials = None
             self.youtube = None
+            self._pending_flow = None
+            self._pending_state = ""
+            self._pending_auth_url = ""
             return True
         except Exception as e:
             print(f"Error revoking auth: {e}")

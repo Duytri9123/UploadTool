@@ -62,6 +62,33 @@ translation:
   hf_token: ""
   preferred_provider: deepseek
 
+upload:
+  platform: youtube
+  auto_upload: false
+  youtube:
+    title_template: "{title}"
+    description_template: "{title}"
+    privacy_status: private
+  tiktok:
+    title_template: "{title}"
+    caption_template: "{title}"
+    privacy_status: private
+    scopes:
+      - user.info.basic
+      - video.publish
+    client_key: ""
+    client_secret: ""
+    client_key_env: TIKTOK_CLIENT_KEY
+    client_secret_env: TIKTOK_CLIENT_SECRET
+    redirect_uri: ""
+
+ngrok:
+  enabled: false
+  authtoken: ""
+  domain: ""
+  bind_tls: true
+  public_url: ""
+
 browser_fallback:
   enabled: true
   headless: false
