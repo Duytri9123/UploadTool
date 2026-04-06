@@ -737,6 +737,9 @@ class MultiProviderTTS:
         tmpdir: Path,
         max_concurrency: int = 2,
         retries: int = 2,
+        tts_speed: float = 1.0,
+        auto_speed: bool = True,
+        ffmpeg: str = "ffmpeg",
     ) -> list[dict]:
         """
         Generate TTS for all segments with bounded concurrency.
@@ -750,13 +753,25 @@ class MultiProviderTTS:
             if not text or not text.strip():
                 return None
             out_path = tmpdir / f"tts_{i:04d}.mp3"
-            # Bound parallel requests to avoid provider throttling.
             async with sem:
                 for _attempt in range(max(1, int(retries) + 1)):
                     ok = await self.generate(text.strip(), out_path)
                     if ok:
+                        # Auto-speed: fit TTS duration to segment duration
+                        speed = float(tts_speed) if tts_speed else 1.0
+                        if auto_speed:
+                            seg_dur = float(seg["end"]) - float(seg["start"])
+                            tts_dur = _get_audio_duration(ffmpeg, out_path)
+                            if tts_dur > 0 and seg_dur > 0:
+                                auto = tts_dur / seg_dur
+                                auto = max(0.5, min(3.0, auto))
+                                speed = max(0.5, min(3.0, auto * speed))
+                        if abs(speed - 1.0) > 0.05:
+                            sped_path = tmpdir / f"tts_{i:04d}_fast.mp3"
+                            _apply_atempo(ffmpeg, out_path, sped_path, speed)
+                            if sped_path.exists() and sped_path.stat().st_size > 0:
+                                out_path = sped_path
                         return {"path": out_path, "start": seg["start"], "end": seg["end"]}
-                    # Small exponential backoff helps with temporary TTS throttling.
                     await asyncio.sleep(0.25 * (_attempt + 1))
             return None
 
@@ -773,11 +788,48 @@ class MultiProviderTTS:
 # ══════════════════════════════════════════════════════════════════════════════
 # STEP 3: Voice conversion ZH → VI
 # ══════════════════════════════════════════════════════════════════════════════
-async def _tts_edge(text: str, voice: str, out_path: Path) -> bool:
+def _get_audio_duration(ffmpeg: str, path: Path) -> float:
+    """Return duration of an audio file in seconds."""
+    try:
+        r = subprocess.run(
+            [ffmpeg, "-i", str(path), "-f", "null", "-"],
+            capture_output=True, text=True
+        )
+        for line in r.stderr.splitlines():
+            m = re.search(r'Duration:\s*(\d+):(\d+):([\d.]+)', line)
+            if m:
+                return int(m.group(1))*3600 + int(m.group(2))*60 + float(m.group(3))
+    except Exception:
+        pass
+    return 0.0
+
+
+def _apply_atempo(ffmpeg: str, src: Path, dst: Path, speed: float) -> bool:
+    """Speed up/slow down audio using ffmpeg atempo (chains if >2x or <0.5x)."""
+    # atempo supports 0.5–2.0, chain for values outside range
+    filters = []
+    s = speed
+    while s > 2.0:
+        filters.append("atempo=2.0")
+        s /= 2.0
+    while s < 0.5:
+        filters.append("atempo=0.5")
+        s /= 0.5
+    filters.append(f"atempo={s:.4f}")
+    filter_str = ",".join(filters)
+    ok, _ = run_ffmpeg([
+        ffmpeg, "-i", str(src),
+        "-filter:a", filter_str,
+        str(dst), "-y", "-loglevel", "error"
+    ], "atempo")
+    return ok
+
+
+async def _tts_edge(text: str, voice: str, out_path: Path, rate: str = "+0%") -> bool:
     """Generate TTS audio using edge-tts."""
     try:
         import edge_tts
-        communicate = edge_tts.Communicate(text, voice)
+        communicate = edge_tts.Communicate(text, voice, rate=rate)
         await communicate.save(str(out_path))
         return out_path.exists() and out_path.stat().st_size > 0
     except Exception as e:
@@ -864,6 +916,8 @@ async def convert_voice(
     tts_engine: str = "edge-tts",   # "edge-tts" | "gtts"
     keep_bg_music: bool = True,
     bg_volume: float = 0.15,        # background original audio volume
+    tts_speed: float = 1.0,         # manual speed multiplier (1.0 = auto-fit)
+    auto_speed: bool = True,        # auto-fit TTS duration to segment duration
 ) -> tuple[bool, str]:
     """
     Replace original audio with Vietnamese TTS voice.
@@ -911,6 +965,23 @@ async def convert_voice(
                 else:
                     ok = _tts_gtts(vi_text.strip(), "vi", clip_path)
                 if ok:
+                    seg_dur = seg["end"] - seg["start"]
+                    # Get TTS clip duration
+                    tts_dur = _get_audio_duration(ffmpeg, clip_path)
+                    # Compute speed: auto-fit or manual
+                    speed = tts_speed
+                    if auto_speed and tts_dur > 0 and seg_dur > 0:
+                        auto = tts_dur / seg_dur  # how much faster needed
+                        # clamp between 0.5x and 3.0x
+                        auto = max(0.5, min(3.0, auto))
+                        speed = auto * tts_speed
+                        speed = max(0.5, min(3.0, speed))
+                    # Apply speed with atempo if needed
+                    if abs(speed - 1.0) > 0.05:
+                        sped_path = tmpdir / f"tts_{i:04d}_fast.mp3"
+                        _apply_atempo(ffmpeg, clip_path, sped_path, speed)
+                        if sped_path.exists():
+                            clip_path = sped_path
                     tts_clips.append({
                         "path": clip_path,
                         "start": seg["start"],
@@ -1394,6 +1465,9 @@ def process_video_full(data: dict) -> Generator[str, None, None]:
                         Path(tts_tmpdir),
                         max_concurrency=_as_int(data.get("tts_concurrency", 2), 2),
                         retries=_as_int(data.get("tts_retries", 2), 2),
+                        tts_speed=_as_float(data.get("tts_speed", 1.0), 1.0),
+                        auto_speed=_as_bool(data.get("auto_speed", True), True),
+                        ffmpeg=ffmpeg,
                     )
                 )
                 yield send(

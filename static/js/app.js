@@ -136,6 +136,8 @@ function startProcessVideo() {
     tts_voice:        document.getElementById('proc-tts-voice')?.value || 'vi-VN-HoaiMyNeural',
     keep_bg_music:    document.getElementById('proc-keep-bg')?.checked ?? false,
     bg_volume:        parseFloat(document.getElementById('proc-bg-vol')?.value || '0.15'),
+    tts_speed:        parseFloat(document.getElementById('proc-tts-speed')?.value || '1.0'),
+    auto_speed:       document.getElementById('proc-auto-speed')?.checked ?? true,
     process_mode:     window._procMode || 'ai',
   };
 
@@ -422,6 +424,76 @@ async function previewTranscribeVoice() {
   }
 }
 
+/* ── Multi-file publish queue ────────────────────────────────────────────── */
+window._procFileQueue = []; // [{file, name, path}]
+
+function handlePublishFileInput(input) {
+  const files = input.files ? Array.from(input.files) : [];
+  files.forEach(f => _procFileQueueAdd(f));
+  input.value = '';
+}
+
+function _procFileQueueAdd(fileOrPath) {
+  const isFile = typeof File !== 'undefined' && fileOrPath instanceof File;
+  const name = isFile ? fileOrPath.name : String(fileOrPath).split(/[\\/]/).pop();
+  const id = Date.now() + '_' + Math.random().toString(36).slice(2);
+  window._procFileQueue.push({ id, file: isFile ? fileOrPath : null, path: isFile ? null : String(fileOrPath), name });
+  _renderProcFileList();
+}
+
+function _procFileQueueRemove(id) {
+  window._procFileQueue = window._procFileQueue.filter(f => f.id !== id);
+  _renderProcFileList();
+}
+
+function _renderProcFileList() {
+  const list = document.getElementById('proc-file-list');
+  if (!list) return;
+  if (!window._procFileQueue.length) { list.style.display = 'none'; return; }
+  list.style.display = 'flex';
+  list.innerHTML = window._procFileQueue.map(f => `
+    <div id="pfl-${f.id}" style="display:flex;align-items:center;gap:6px;padding:5px 8px;background:var(--surf2,#2a2a3e);border-radius:6px;font-size:12px">
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${f.name}">${f.name}</span>
+      <span id="pfl-status-${f.id}" style="color:var(--dim,#888);font-size:11px;min-width:60px;text-align:right"></span>
+      <button onclick="_procFileQueueRemove('${f.id}')" style="background:none;border:none;color:#ff5555;cursor:pointer;font-size:14px;padding:0 2px">✕</button>
+    </div>`).join('');
+}
+
+async function publishQueueToTarget(target) {
+  if (!window._procFileQueue.length) {
+    toast('Chưa có file nào trong danh sách', 'warning');
+    return;
+  }
+  const logBox = document.getElementById('publish-log');
+  if (logBox) { logBox.innerHTML = ''; logBox.style.display = 'block'; }
+
+  const queue = [...window._procFileQueue];
+  for (const item of queue) {
+    const statusEl = document.getElementById(`pfl-status-${item.id}`);
+    if (statusEl) statusEl.textContent = '⏳ Đang đăng...';
+
+    try {
+      if (target === 'tiktok' || target === 'both') {
+        window._publishLastOutputPath = item.path || item.name;
+        window._procSelectedFile = item.file;
+        await publishToTikTok(item.path || item.file);
+      }
+      if (target === 'youtube' || target === 'both') {
+        window._publishLastOutputPath = item.path || item.name;
+        window._ytLastOutputPath = item.path || item.name;
+        window._procSelectedFile = item.file;
+        await uploadToYouTube(item.path || item.file);
+      }
+      if (statusEl) statusEl.textContent = '✓ Xong';
+      // Remove from queue after success
+      _procFileQueueRemove(item.id);
+    } catch (e) {
+      if (statusEl) statusEl.textContent = '✗ Lỗi';
+      _appendPublishLog(`✗ ${item.name}: ${e.message || e}`, 'error');
+    }
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   applyI18n();
   switchPage('user');
@@ -437,6 +509,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const label = document.getElementById('proc-file-name');
     if (pathBox) pathBox.value = file ? file.name : '';
     if (label) label.textContent = file ? file.name : '--';
+    this.value = '';
   });
 
   document.getElementById('proc-tts-engine')?.addEventListener('change', function() {
@@ -538,7 +611,7 @@ function loadPublishSettings() {
 }
 
 function switchPublishPlatform(platform) {
-  const normalized = platform === 'tiktok' ? 'tiktok' : 'youtube';
+  const normalized = platform === 'tiktok' ? 'tiktok' : platform === 'both' ? 'both' : 'youtube';
   window._publishPlatform = normalized;
   localStorage.setItem('publish_platform', normalized);
 
@@ -547,12 +620,10 @@ function switchPublishPlatform(platform) {
   const status = document.getElementById('publish-status');
   const platformSelect = document.getElementById('publish-platform');
 
-  if (platformSelect && platformSelect.value !== normalized) {
-    platformSelect.value = normalized;
-  }
-  if (ytPanel) ytPanel.style.display = normalized === 'youtube' ? 'block' : 'none';
-  if (ttPanel) ttPanel.style.display = normalized === 'tiktok' ? 'block' : 'none';
-  if (status) status.textContent = normalized === 'youtube' ? 'YouTube' : 'TikTok';
+  if (platformSelect && platformSelect.value !== normalized) platformSelect.value = normalized;
+  if (ytPanel) ytPanel.style.display = (normalized === 'youtube' || normalized === 'both') ? 'block' : 'none';
+  if (ttPanel) ttPanel.style.display = (normalized === 'tiktok' || normalized === 'both') ? 'block' : 'none';
+  if (status) status.textContent = normalized === 'youtube' ? 'YouTube' : normalized === 'tiktok' ? 'TikTok' : 'TikTok + YouTube';
 }
 
 function _getPublishAutoUpload() {
@@ -1138,15 +1209,16 @@ async function publishBothOrSingle(target) {
   const logBox = document.getElementById('publish-log');
   if (logBox) { logBox.innerHTML = ''; logBox.style.display = 'block'; }
 
-  if (target === 'tiktok' || target === 'both') {
-    await publishToTikTok(videoPath);
-  }
-  if (target === 'youtube' || target === 'both') {
-    await uploadToYouTube(videoPath);
-  }
+  const t = target || window._publishPlatform || 'youtube';
+  if (t === 'tiktok' || t === 'both') await publishToTikTok(videoPath);
+  if (t === 'youtube' || t === 'both') await uploadToYouTube(videoPath);
 }
 
 async function publishSelectedPlatform() {
   const platform = window._publishPlatform || document.getElementById('publish-platform')?.value || 'youtube';
-  await publishBothOrSingle(platform);
+  if (window._procFileQueue.length) {
+    await publishQueueToTarget(platform);
+  } else {
+    await publishBothOrSingle(platform);
+  }
 }

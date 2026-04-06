@@ -199,6 +199,22 @@
                     style="width:100%;accent-color:var(--accent)">
                   <span class="text-xs text-muted" id="proc-bg-vol-val">0.1</span>
                 </div>
+                <div class="field">
+                  <label>Tốc độ đọc
+                    <span style="color:var(--dim);font-size:11px"> — Auto = tự khớp theo segment</span>
+                  </label>
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <input type="range" id="proc-tts-speed" min="0.5" max="3.0" step="0.1" value="1.0"
+                      oninput="document.getElementById('proc-tts-speed-val').textContent=parseFloat(this.value).toFixed(1)+'x';document.getElementById('proc-auto-speed').checked=false"
+                      style="flex:1;accent-color:var(--accent)">
+                    <span class="text-xs" id="proc-tts-speed-val" style="min-width:32px">1.0x</span>
+                  </div>
+                  <label class="check-item" style="margin-top:6px;display:flex;align-items:center;gap:6px;cursor:pointer">
+                    <input type="checkbox" id="proc-auto-speed" checked
+                      onchange="document.getElementById('proc-tts-speed').value=1.0;document.getElementById('proc-tts-speed-val').textContent='1.0x'">
+                    <span style="font-size:12px">Tự động khớp tốc độ theo độ dài segment</span>
+                  </label>
+                </div>
                 <div class="alert-info" style="padding:8px 12px;border-radius:6px;background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.3);color:#60a5fa;font-size:12px;margin-top:8px">
                   <span data-i18n="lbl_voice_note">Can: pip install edge-tts (hoac gtts). Moi doan se duoc doc bang giong Viet tai dung thoi diem.</span>
                 </div>
@@ -212,6 +228,113 @@
 
           <!-- Right: Progress + Log -->
           <div>
+            <div class="card" style="margin-bottom:14px">
+              <div class="card-header">
+                <span class="card-title">📤 Đăng video</span>
+                <div class="card-actions"><span class="text-xs text-muted" id="publish-status">Chưa chọn</span></div>
+              </div>
+
+              <!-- Multi-file import -->
+              <div class="field">
+                <label>📁 File cần đăng <span style="color:var(--dim);font-size:11px">(chọn nhiều file)</span></label>
+                <div class="flex-center gap-8">
+                  <button class="btn btn-secondary btn-sm" type="button" onclick="document.getElementById('publish-file-input')?.click()">+ Thêm file</button>
+                  <input type="file" id="publish-file-input" accept="video/*" multiple style="display:none" onchange="handlePublishFileInput(this)">
+                  <button class="btn btn-secondary btn-sm" type="button" onclick="window._procFileQueue=[];_renderProcFileList()" style="color:#ff5555">Xóa tất cả</button>
+                </div>
+                <div style="font-size:11px;color:var(--dim);margin-top:4px">Hoặc xử lý video bên trái → file output sẽ tự động được thêm vào đây</div>
+                <div id="proc-file-list" style="margin-top:8px;display:flex;flex-direction:column;gap:4px"></div>
+              </div>
+
+              <!-- Platform -->
+              <div class="field">
+                <label>Nền tảng</label>
+                <select id="publish-platform" onchange="switchPublishPlatform(this.value)">
+                  <option value="youtube" selected>▶ YouTube</option>
+                  <option value="tiktok">🎵 TikTok</option>
+                  <option value="both">🚀 Cả 2 (TikTok + YouTube)</option>
+                </select>
+              </div>
+              <div class="field">
+                <label class="check-item" style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                  <input type="checkbox" id="publish-auto-upload">
+                  <span>Tự động đăng sau khi xử lý xong</span>
+                </label>
+              </div>
+
+              <div id="publish-youtube-panel">
+                <div class="field">
+                  <label>Trạng thái YouTube</label>
+                  <div id="yt-channel-info" style="padding:8px;background:rgba(0,0,0,.2);border-radius:4px;font-size:12px;display:none">
+                    <div><strong>Channel</strong>: <span id="yt-ch-name">--</span></div>
+                    <div><strong>Subscribers</strong>: <span id="yt-ch-subs">--</span></div>
+                    <div><strong>Videos</strong>: <span id="yt-ch-videos">--</span></div>
+                  </div>
+                  <div id="yt-auth-needed" style="display:none"></div>
+                </div>
+                <div class="btn-group" style="gap:8px">
+                  <button class="btn btn-secondary btn-sm" id="btn-yt-auth" onclick="youtubeLogin()" data-i18n="btn_youtube_login">Đăng nhập YouTube</button>
+                  <button class="btn btn-danger btn-sm" id="btn-yt-logout" onclick="youtubeLogout()" style="display:none" data-i18n="btn_youtube_logout">Đăng xuất</button>
+                </div>
+                <div class="field" style="margin-top:8px">
+                  <label>Tiêu đề YouTube</label>
+                  <input type="text" id="yt-title" placeholder="{title}">
+                </div>
+                <div class="field">
+                  <label>Mô tả</label>
+                  <textarea id="yt-desc" rows="2" placeholder="{title}"></textarea>
+                </div>
+                <div class="field">
+                  <label>Chế độ riêng tư</label>
+                  <select id="yt-privacy">
+                    <option value="private" selected>Riêng tư (Private)</option>
+                    <option value="unlisted">Ẩn (Unlisted)</option>
+                    <option value="public">Công khai (Public)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div id="publish-tiktok-panel" style="display:none">
+                <div class="field">
+                  <label>Trạng thái TikTok</label>
+                  <div id="tt-account-info" style="padding:8px;background:rgba(0,0,0,.2);border-radius:4px;font-size:12px;display:none">
+                    <div><strong>Open ID</strong>: <span id="tt-account-openid">--</span></div>
+                    <div><strong>Scope</strong>: <span id="tt-account-scope">--</span></div>
+                  </div>
+                  <div id="tt-auth-needed" style="padding:8px;background:rgba(255,107,107,.1);border-radius:4px;border:1px solid rgba(255,107,107,.3)">
+                    <div style="font-size:12px;color:#ff6b6b">Bạn chưa đăng nhập TikTok API.</div>
+                  </div>
+                </div>
+                <div class="btn-group" style="gap:8px">
+                  <button class="btn btn-secondary btn-sm" id="btn-tt-auth" onclick="tiktokLogin()">Đăng nhập TikTok</button>
+                  <button class="btn btn-danger btn-sm" id="btn-tt-logout" onclick="tiktokLogout()" style="display:none">Đăng xuất</button>
+                </div>
+                <div class="field" style="margin-top:8px">
+                  <label>Tiêu đề TikTok</label>
+                  <input type="text" id="tt-title" placeholder="{title}">
+                </div>
+                <div class="field">
+                  <label>Hashtags <span style="color:var(--dim);font-size:11px">(tự động từ tiếng Trung)</span></label>
+                  <input type="text" id="tt-tags" placeholder="#douyin #vietsub #viral">
+                </div>
+                <div class="field">
+                  <label>Chế độ hiển thị</label>
+                  <select id="tt-privacy">
+                    <option value="SELF_ONLY">Riêng tư</option>
+                    <option value="MUTUAL_FOLLOW_FRIENDS">Bạn bè</option>
+                    <option value="PUBLIC_TO_EVERYONE" selected>Công khai</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="btn-group" style="gap:8px;margin-top:12px;flex-wrap:wrap">
+                <button class="btn btn-primary btn-sm" onclick="publishSelectedPlatform()" style="background:var(--accent)">
+                  🚀 Đăng video
+                </button>
+                <button class="btn btn-secondary btn-sm" onclick="savePublishSettings()">Lưu cấu hình</button>
+              </div>
+              <div class="log-box" id="publish-log" style="height:160px;display:none;margin-top:8px"></div>
+            </div>
             <div class="card">
               <div class="card-header">
                 <span class="card-title"><span data-i18n="lbl_queue">Hàng chờ</span> (<span id="queue-count">0</span>)</span>
@@ -252,118 +375,6 @@
             <div class="card" id="proc-result" style="display:none">
               <div class="card-header"><span class="card-title" data-i18n="lbl_output_files">File dau ra</span></div>
               <div id="proc-result-content" class="text-sm" style="line-height:1.8"></div>
-            </div>
-
-            <div class="card" style="margin-top:14px">
-              <div class="card-header">
-                <span class="card-title">Đăng video</span>
-                <div class="card-actions">
-                  <span class="text-xs text-muted" id="publish-status">Chưa chọn</span>
-                </div>
-              </div>
-              <div class="field">
-                <label>Nền tảng đăng</label>
-                <select id="publish-platform">
-                  <option value="youtube" selected>YouTube</option>
-                  <option value="tiktok">TikTok</option>
-                </select>
-              </div>
-              <div class="field" style="margin-top:8px">
-                <div class="check-grid">
-                  <label class="check-item">
-                    <input type="checkbox" id="publish-auto-upload">
-                    <span>Tự động đăng sau khi xử lý xong</span>
-                  </label>
-                </div>
-              </div>
-
-              <div id="publish-youtube-panel">
-                <div class="field">
-                  <label>Trạng thái YouTube</label>
-                  <div id="yt-channel-info" style="padding:8px;background:rgba(0,0,0,.2);border-radius:4px;font-size:12px;display:none">
-                    <div><strong data-i18n="lbl_channel">Channel</strong>: <span id="yt-ch-name">--</span></div>
-                    <div><strong>Subscribers</strong>: <span id="yt-ch-subs">--</span></div>
-                    <div><strong>Videos</strong>: <span id="yt-ch-videos">--</span></div>
-                  </div>
-                  <div id="yt-auth-needed" style="display:none"></div>
-                </div>
-                <div class="btn-group" style="gap:8px">
-                  <button class="btn btn-secondary btn-sm" id="btn-yt-auth" onclick="youtubeLogin()" data-i18n="btn_youtube_login">Đăng nhập YouTube</button>
-                  <button class="btn btn-danger btn-sm" id="btn-yt-logout" onclick="youtubeLogout()" style="display:none" data-i18n="btn_youtube_logout">Đăng xuất</button>
-                </div>
-                <div class="field" style="margin-top:12px">
-                  <label>Tiêu đề YouTube</label>
-                  <input type="text" id="yt-title" placeholder="Lấy từ title đã dịch nếu để trống">
-                </div>
-                <div class="field">
-                  <label>Mô tả</label>
-                  <textarea id="yt-desc" rows="3" placeholder="Mô tả chi tiết cho video..."></textarea>
-                </div>
-                <div class="field">
-                  <label>Chế độ riêng tư</label>
-                  <select id="yt-privacy">
-                    <option value="private" selected>Riêng tư (Private)</option>
-                    <option value="unlisted">Ẩn (Unlisted)</option>
-                    <option value="public">Công khai (Public)</option>
-                  </select>
-                </div>
-              </div>
-
-              <div id="publish-tiktok-panel" style="display:none">
-                <div class="field">
-                  <label>Trạng thái TikTok</label>
-                  <div id="tt-account-info" style="padding:8px;background:rgba(0,0,0,.2);border-radius:4px;font-size:12px;display:none">
-                    <div><strong>Open ID</strong>: <span id="tt-account-openid">--</span></div>
-                    <div><strong>Scope</strong>: <span id="tt-account-scope">--</span></div>
-                  </div>
-                  <div id="tt-auth-needed" style="padding:8px;background:rgba(255,107,107,.1);border-radius:4px;border:1px solid rgba(255,107,107,.3);display:block">
-                    <div style="font-size:12px;color:#ff6b6b">
-                      Bạn chưa đăng nhập TikTok API. Bấm nút dưới để kết nối.
-                    </div>
-                  </div>
-                </div>
-                <div class="btn-group" style="gap:8px">
-                  <button class="btn btn-secondary btn-sm" id="btn-tt-auth" onclick="tiktokLogin()">Đăng nhập TikTok</button>
-                  <button class="btn btn-danger btn-sm" id="btn-tt-logout" onclick="tiktokLogout()" style="display:none">Đăng xuất</button>
-                </div>
-                <div class="field">
-                  <label>Tiêu đề TikTok</label>
-                  <input type="text" id="tt-title" placeholder="Lấy từ title đã dịch nếu để trống">
-                </div>
-                <div class="field">
-                  <label>Caption</label>
-                  <textarea id="tt-desc" rows="3" placeholder="Mô tả/caption cho TikTok..."></textarea>
-                </div>
-                <div class="field">
-                  <label>Hashtags</label>
-                  <input type="text" id="tt-tags" placeholder="#douyin #vietsub #viral">
-                </div>
-                <div class="field">
-                  <label>Chế độ hiển thị</label>
-                  <select id="tt-privacy">
-                    <option value="private">Riêng tư</option>
-                    <option value="friends">Bạn bè</option>
-                    <option value="public" selected>Công khai</option>
-                  </select>
-                </div>
-                <div class="alert-info" style="margin-top:8px;background:rgba(80,250,123,.08);border-color:rgba(80,250,123,.3);color:#50fa7b;font-size:12px">
-                  Hashtags sẽ được tự động tạo từ phần tiếng Trung trong tên file và dịch sang tiếng Việt.
-                </div>
-              </div>
-
-              <div class="btn-group" style="gap:8px;margin-top:12px;flex-wrap:wrap">
-                <button class="btn btn-primary btn-sm" id="btn-publish-tiktok" onclick="publishBothOrSingle('tiktok')" style="background:#ff2d55;border-color:#ff2d55">
-                  🎵 Đăng lên TikTok
-                </button>
-                <button class="btn btn-primary btn-sm" id="btn-publish-youtube" onclick="publishBothOrSingle('youtube')" style="background:#ff0000;border-color:#ff0000">
-                  ▶ Đăng lên YouTube
-                </button>
-                <button class="btn btn-primary btn-sm" id="btn-publish-both" onclick="publishBothOrSingle('both')" style="background:var(--accent)">
-                  🚀 Đăng cả 2
-                </button>
-                <button class="btn btn-secondary btn-sm" onclick="savePublishSettings()">Lưu cấu hình</button>
-              </div>
-              <div class="log-box" id="publish-log" style="height:200px;display:none;margin-top:12px"></div>
             </div>
 
           </div>
