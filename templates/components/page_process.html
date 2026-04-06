@@ -346,14 +346,22 @@
                     <option value="public" selected>Công khai</option>
                   </select>
                 </div>
-                <div class="alert-info" style="margin-top:8px">
-                  Sau khi đăng nhập API, app vẫn mở trang upload thủ công. Mình sẽ thêm upload API tự động ở bước tiếp theo.
+                <div class="alert-info" style="margin-top:8px;background:rgba(80,250,123,.08);border-color:rgba(80,250,123,.3);color:#50fa7b;font-size:12px">
+                  Hashtags sẽ được tự động tạo từ phần tiếng Trung trong tên file và dịch sang tiếng Việt.
                 </div>
               </div>
 
-              <div class="btn-group" style="gap:8px;margin-top:12px">
-                <button class="btn btn-primary btn-sm" id="btn-publish" onclick="publishSelectedPlatform()">Đăng video</button>
-                <button class="btn btn-secondary btn-sm" onclick="savePublishSettings()">Lưu cấu hình đăng</button>
+              <div class="btn-group" style="gap:8px;margin-top:12px;flex-wrap:wrap">
+                <button class="btn btn-primary btn-sm" id="btn-publish-tiktok" onclick="publishBothOrSingle('tiktok')" style="background:#ff2d55;border-color:#ff2d55">
+                  🎵 Đăng lên TikTok
+                </button>
+                <button class="btn btn-primary btn-sm" id="btn-publish-youtube" onclick="publishBothOrSingle('youtube')" style="background:#ff0000;border-color:#ff0000">
+                  ▶ Đăng lên YouTube
+                </button>
+                <button class="btn btn-primary btn-sm" id="btn-publish-both" onclick="publishBothOrSingle('both')" style="background:var(--accent)">
+                  🚀 Đăng cả 2
+                </button>
+                <button class="btn btn-secondary btn-sm" onclick="savePublishSettings()">Lưu cấu hình</button>
               </div>
               <div class="log-box" id="publish-log" style="height:200px;display:none;margin-top:12px"></div>
             </div>
