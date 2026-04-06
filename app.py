@@ -1819,6 +1819,102 @@ def youtube_logout():
     return jsonify({"ok": False, "error": "Failed to logout"}), 500
 
 
+@app.route("/api/tiktok_upload", methods=["POST"])
+def tiktok_upload():
+    """Upload video to TikTok using Content Posting API."""
+    from flask import Response, stream_with_context
+    import json as _j
+    from pathlib import Path as _Path
+
+    data = request.json or {}
+    video_path = str(data.get("video_path") or "").strip()
+    title = str(data.get("title") or "").strip()
+    privacy_level = str(data.get("privacy_level") or "SELF_ONLY").strip().upper()
+
+    if not video_path:
+        return jsonify({"ok": False, "error": "Missing video_path"}), 400
+    if not _Path(video_path).exists():
+        return jsonify({"ok": False, "error": f"Video not found: {video_path}"}), 404
+
+    creds = _get_tiktok_credentials("127.0.0.1", 8080)
+    uploader = _get_tiktok_uploader()
+
+    if not uploader.authenticate(creds["client_key"], creds["client_secret"]):
+        return jsonify({"ok": False, "error": "Not authenticated with TikTok. Please login first."}), 401
+
+    def generate():
+        def send(**kw):
+            return _j.dumps(kw, ensure_ascii=False) + "\n"
+
+        progress_msgs = []
+
+        def on_progress(status):
+            progress_msgs.append(send(**status))
+
+        result = uploader.upload_video(
+            video_path=video_path,
+            title=title or _Path(video_path).stem,
+            privacy_level=privacy_level,
+            on_progress=on_progress,
+        )
+
+        for msg in progress_msgs:
+            yield msg
+
+        if result:
+            yield send(
+                log=f"[TikTok] ✓ Đã gửi lên TikTok (publish_id: {result.get('publish_id', '')}). Video đang được xử lý.",
+                level="success",
+                publish_id=result.get("publish_id", ""),
+            )
+        else:
+            err = str(getattr(uploader, "last_error", "") or "Upload thất bại")
+            yield send(log=f"[TikTok] ✗ {err}", level="error")
+
+    return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
+
+
+@app.route("/terms")
+def terms_of_service():
+    return """<!doctype html>
+<html lang="vi"><head><meta charset="utf-8"><title>Terms of Service</title>
+<style>body{font-family:Arial,sans-serif;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.6;color:#333}</style>
+</head><body>
+<h1>Terms of Service</h1>
+<p><strong>Last updated:</strong> April 2026</p>
+<p>This application is a personal tool for downloading and reposting content. By using this app, you agree to comply with TikTok's Terms of Service and all applicable laws.</p>
+<h2>Usage</h2>
+<p>This app uses TikTok's official API to publish videos on behalf of authenticated users. You are responsible for the content you post.</p>
+<h2>Prohibited Use</h2>
+<p>You may not use this app to post content that violates TikTok's Community Guidelines or any applicable laws.</p>
+<h2>Contact</h2>
+<p>For questions, contact the app owner directly.</p>
+</body></html>"""
+
+
+@app.route("/privacy")
+def privacy_policy():
+    return """<!doctype html>
+<html lang="vi"><head><meta charset="utf-8"><title>Privacy Policy</title>
+<style>body{font-family:Arial,sans-serif;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.6;color:#333}</style>
+</head><body>
+<h1>Privacy Policy</h1>
+<p><strong>Last updated:</strong> April 2026</p>
+<p>This application does not collect or store any personal data beyond what is necessary to authenticate with TikTok's API.</p>
+<h2>Data We Store</h2>
+<ul>
+<li>TikTok OAuth access tokens (stored locally on your device only)</li>
+<li>Downloaded video files (stored locally on your device)</li>
+</ul>
+<h2>Data We Do NOT Share</h2>
+<p>We do not sell, share, or transmit your personal data to any third parties.</p>
+<h2>TikTok API</h2>
+<p>This app uses TikTok's official API. Please refer to <a href="https://www.tiktok.com/legal/privacy-policy">TikTok's Privacy Policy</a> for how TikTok handles your data.</p>
+<h2>Contact</h2>
+<p>For questions, contact the app owner directly.</p>
+</body></html>"""
+
+
 if __name__ == "__main__":
     import webbrowser, time
     APP_HOST = "127.0.0.1"

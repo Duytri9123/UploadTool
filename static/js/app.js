@@ -568,15 +568,61 @@ function _renderPublishTemplate(template, values) {
   }).trim();
 }
 
+function _cleanStemToTitle(stem) {
+  // Remove extension
+  let t = stem.replace(/\.[^/.]+$/, '');
+  // Remove trailing _vi_voice, _voice, _vi suffixes
+  t = t.replace(/_(vi_voice|voice|vi)$/i, '');
+  // Remove date prefix like 2024-01-15_
+  t = t.replace(/^\d{4}-\d{2}-\d{2}_/, '');
+  // Remove aweme_id suffix (long numeric id at end)
+  t = t.replace(/_\d{15,}$/, '');
+  // Split off Chinese characters into separate part
+  const chineseMatch = t.match(/[\u4e00-\u9fff\u3400-\u4dbf][^\u0000-\u007F_]*/g);
+  // Remove Chinese segments from title
+  t = t.replace(/[\u4e00-\u9fff\u3400-\u4dbf][^\u0000-\u007F]*/g, '').replace(/_+/g, ' ').trim();
+  return { title: t, chineseParts: chineseMatch || [] };
+}
+
+async function _buildPublishTitleAndTags(platform, fallbackPath) {
+  const stem = (fallbackPath || '').split(/[\\/]/).pop() || '';
+  const inputId = platform === 'tiktok' ? 'tt-title' : 'yt-title';
+  const raw = (document.getElementById(inputId)?.value || '').trim();
+  const { title: baseTitle, chineseParts } = _cleanStemToTitle(stem);
+
+  const finalTitle = _renderPublishTemplate(raw || '{title}', {
+    title: baseTitle, filename: stem, platform,
+  }) || baseTitle;
+
+  // Translate Chinese parts to hashtags
+  let hashtags = [];
+  if (chineseParts.length > 0) {
+    try {
+      const res = await fetch('/api/translate_batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ texts: chineseParts }),
+      });
+      const data = await res.json();
+      hashtags = (data.results || chineseParts).map(s =>
+        '#' + s.trim().toLowerCase().replace(/\s+/g, '')
+      ).filter(h => h.length > 1);
+    } catch (_) {
+      // fallback: use Chinese as-is
+      hashtags = chineseParts.map(s => '#' + s.trim().replace(/\s+/g, ''));
+    }
+  }
+
+  return { title: finalTitle, hashtags };
+}
+
 function _getPublishTitle(platform, fallbackPath) {
   const stem = (fallbackPath || '').split(/[\\/]/).pop() || '';
   const inputId = platform === 'tiktok' ? 'tt-title' : 'yt-title';
   const raw = (document.getElementById(inputId)?.value || '').trim();
-  const baseTitle = stem.replace(/\.[^/.]+$/, '');
+  const { title: baseTitle } = _cleanStemToTitle(stem);
   return _renderPublishTemplate(raw || '{title}', {
-    title: baseTitle,
-    filename: stem,
-    platform,
+    title: baseTitle, filename: stem, platform,
   }) || baseTitle;
 }
 
@@ -982,32 +1028,73 @@ async function publishToTikTok(videoInput) {
   }
 
   if (!window._ttAuthenticated) {
-    toast('Bạn chưa đăng nhập TikTok API. Vẫn mở chế độ đăng thủ công.', 'warning');
+    toast('Bạn chưa đăng nhập TikTok. Vui lòng đăng nhập trước.', 'error');
+    _appendPublishLog('✗ Chưa đăng nhập TikTok API. Nhấn "Đăng nhập TikTok" trước.', 'error');
+    return;
   }
 
-  const title = _getPublishTitle('tiktok', videoPath);
-  const caption = _getPublishDescription('tiktok');
-  const tags = _getPublishTags();
+  const { title, hashtags } = await _buildPublishTitleAndTags('tiktok', videoPath);
   const privacy = _getPublishPrivacy('tiktok');
 
-  localStorage.setItem('tiktok_last_title', title);
-  localStorage.setItem('tiktok_last_caption', caption);
-  localStorage.setItem('tiktok_last_tags', tags);
-  localStorage.setItem('tiktok_last_privacy', privacy);
+  // Auto-fill hashtag field so user can see/edit
+  const tagsEl = document.getElementById('tt-tags');
+  if (tagsEl && !tagsEl.value.trim() && hashtags.length) {
+    tagsEl.value = hashtags.join(' ');
+  }
+  const manualTags = (document.getElementById('tt-tags')?.value || '').trim()
+    .split(/\s+/).filter(t => t.startsWith('#'));
+  const allTags = [...new Set([...hashtags, ...manualTags])];
+
+  // Append hashtags to title for TikTok caption (max 150 chars total)
+  const hashtagStr = allTags.join(' ');
+  const caption = hashtagStr ? `${title} ${hashtagStr}`.slice(0, 150) : title.slice(0, 150);
+
+  const logBox = document.getElementById('publish-log');
+  if (logBox) { logBox.innerHTML = ''; logBox.style.display = 'block'; }
+
+  _setPublishStatus('Đang đăng TikTok...');
+  _appendPublishLog('Bắt đầu upload lên TikTok...', 'info');
 
   try {
-    const clip = [title, caption, tags ? `Tags: ${tags}` : ''].filter(Boolean).join('\n\n');
-    if (clip && navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(clip);
-    }
-  } catch (_) {}
+    const res = await fetch('/api/tiktok_upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ video_path: videoPath, title: caption, privacy_level: privacy.toUpperCase() }),
+    });
 
-  _setPublishStatus('Đang mở TikTok...');
-  _appendPublishLog('Bắt đầu chuẩn bị TikTok...', 'info');
-  _appendPublishLog('Đã chuẩn bị caption TikTok và mở trang upload.', 'success');
-  toast('Đã sao chép caption TikTok và mở trang upload', 'info');
-  window.open('https://www.tiktok.com/upload?lang=vi-VN', '_blank');
-  _setPublishStatus('Đã mở TikTok');
+    if (!res.ok) {
+      let msg = 'Upload thất bại';
+      try { msg = (await res.json())?.error || msg; } catch (_) {}
+      throw new Error(msg);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const data = JSON.parse(line);
+          if (data.log) _appendPublishLog(data.log, data.level || 'info');
+          if (data.publish_id) {
+            _setPublishStatus('✓ Đã đăng TikTok');
+            toast('✓ Upload TikTok thành công!', 'success');
+          }
+        } catch (_) {}
+      }
+    }
+  } catch (e) {
+    _setPublishStatus('Lỗi TikTok');
+    _appendPublishLog('✗ Lỗi: ' + (e.message || e), 'error');
+    toast('Upload TikTok thất bại: ' + (e.message || e), 'error');
+  }
 }
 
 async function savePublishSettings() {
@@ -1041,19 +1128,25 @@ async function savePublishSettings() {
   }
 }
 
-async function publishSelectedPlatform() {
-  const platform = window._publishPlatform || document.getElementById('publish-platform')?.value || 'youtube';
+async function publishBothOrSingle(target) {
   const videoPath = window._publishLastOutputPath || window._ytLastOutputPath || window._procSelectedFile || '';
-
   if (!videoPath) {
     toast('Chưa có file đầu ra để đăng', 'warning');
     return;
   }
 
-  if (platform === 'tiktok') {
-    await publishToTikTok(videoPath);
-    return;
-  }
+  const logBox = document.getElementById('publish-log');
+  if (logBox) { logBox.innerHTML = ''; logBox.style.display = 'block'; }
 
-  await uploadToYouTube(videoPath);
+  if (target === 'tiktok' || target === 'both') {
+    await publishToTikTok(videoPath);
+  }
+  if (target === 'youtube' || target === 'both') {
+    await uploadToYouTube(videoPath);
+  }
+}
+
+async function publishSelectedPlatform() {
+  const platform = window._publishPlatform || document.getElementById('publish-platform')?.value || 'youtube';
+  await publishBothOrSingle(platform);
 }

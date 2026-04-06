@@ -539,6 +539,13 @@ class BaseDownloader(ABC):
             else:
                 self._progress_post(0, "Hậu xử lý tắt")
 
+        # ── Auto-upload to TikTok / YouTube ──────────────────────────────────
+        if media_type == "video" and video_path is not None and video_path.exists():
+            upload_cfg = self.config.get("upload") or {}
+            if upload_cfg.get("auto_upload"):
+                platform = str(upload_cfg.get("platform") or "").lower()
+                await self._auto_upload(video_path, desc, platform, upload_cfg)
+
         self._mark_local_aweme_downloaded(aweme_id)
         logger.info("Downloaded %s: %s (%s)", media_type, desc, aweme_id)
         return True
@@ -818,6 +825,68 @@ class BaseDownloader(ABC):
             return str(path.relative_to(self.file_manager.base_path))
         except ValueError:
             return str(path)
+
+    async def _auto_upload(self, video_path: Path, title: str, platform: str, upload_cfg: dict) -> None:
+        """Auto-upload a downloaded video to TikTok or YouTube."""
+        if platform == "tiktok":
+            tiktok_cfg = upload_cfg.get("tiktok") or {}
+            client_key = str(tiktok_cfg.get("client_key") or "").strip()
+            client_secret = str(tiktok_cfg.get("client_secret") or "").strip()
+            if not client_key or not client_secret:
+                logger.warning("auto_upload: TikTok client_key/secret missing, skipping")
+                return
+            try:
+                from tools.tiktok_uploader import TikTokUploader
+                uploader = TikTokUploader()
+                if not uploader.authenticate(client_key, client_secret):
+                    logger.warning("auto_upload: TikTok not authenticated, skipping upload for %s", video_path.name)
+                    return
+                caption_tpl = str(tiktok_cfg.get("caption_template") or tiktok_cfg.get("title_template") or "{title}")
+                caption = caption_tpl.replace("{title}", title)
+                privacy = str(tiktok_cfg.get("privacy_status") or "SELF_ONLY").upper()
+                privacy_map = {"private": "SELF_ONLY", "public": "PUBLIC_TO_EVERYONE", "friends": "MUTUAL_FOLLOW_FRIENDS"}
+                privacy = privacy_map.get(privacy.lower(), privacy)
+                result = uploader.upload_video(
+                    video_path=str(video_path),
+                    title=caption,
+                    privacy_level=privacy,
+                    on_progress=lambda s: logger.info("TikTok upload: %s", s.get("log", "")),
+                )
+                if result:
+                    logger.info("auto_upload: TikTok upload OK publish_id=%s for %s", result.get("publish_id"), video_path.name)
+                else:
+                    logger.warning("auto_upload: TikTok upload failed for %s: %s", video_path.name, uploader.last_error)
+            except Exception as exc:
+                logger.error("auto_upload: TikTok exception for %s: %s", video_path.name, exc)
+
+        elif platform == "youtube":
+            yt_cfg = upload_cfg.get("youtube") or {}
+            try:
+                from tools.youtube_uploader import YouTubeUploader
+                uploader = YouTubeUploader()
+                if not uploader.credentials and not uploader.authenticate():
+                    logger.warning("auto_upload: YouTube not authenticated, skipping upload for %s", video_path.name)
+                    return
+                title_tpl = str(yt_cfg.get("title_template") or "{title}")
+                yt_title = title_tpl.replace("{title}", title)
+                desc_tpl = str(yt_cfg.get("description_template") or "{title}")
+                yt_desc = desc_tpl.replace("{title}", title)
+                privacy = str(yt_cfg.get("privacy_status") or "private")
+                result = uploader.upload_video(
+                    video_path=video_path,
+                    title=yt_title,
+                    description=yt_desc,
+                    privacy_status=privacy,
+                    on_progress=lambda s: logger.info("YouTube upload: %s", s),
+                )
+                if result:
+                    logger.info("auto_upload: YouTube upload OK url=%s for %s", result.get("url"), video_path.name)
+                else:
+                    logger.warning("auto_upload: YouTube upload failed for %s", video_path.name)
+            except Exception as exc:
+                logger.error("auto_upload: YouTube exception for %s: %s", video_path.name, exc)
+        else:
+            logger.warning("auto_upload: unknown platform '%s', skipping", platform)
 
     async def _run_video_processor(
         self, video_path: Path, vp_cfg: dict, aweme_id: str

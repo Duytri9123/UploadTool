@@ -187,7 +187,7 @@ class App(tk.Tk):
         nb.pack(fill="both", expand=True, padx=8, pady=6)
 
         tabs = {}
-        for name in ["⚙ Config","🍪 Cookies","⬇ Download","🎙 Transcribe","🗄 History"]:
+        for name in ["⚙ Config","🍪 Cookies","⬇ Download","🎙 Transcribe","🗄 History","🎵 TikTok"]:
             f = tk.Frame(nb, bg=BG)
             nb.add(f, text=name)
             tabs[name] = f
@@ -197,6 +197,7 @@ class App(tk.Tk):
         self._build_download(tabs["⬇ Download"])
         self._build_transcribe(tabs["🎙 Transcribe"])
         self._build_history(tabs["🗄 History"])
+        self._build_tiktok(tabs["🎵 TikTok"])
 
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 1 — Config
@@ -280,6 +281,18 @@ class App(tk.Tk):
             tk.Label(arow, text=label, bg=BG, fg=DIM,
                 font=("Segoe UI",9)).pack(side="left", padx=(8,2))
             entry(arow, getattr(self,var), width=w).pack(side="left", padx=(0,6))
+
+        # Upload
+        sec7 = section(inner,"Auto Upload"); sec7.pack(fill="x", **pad)
+        urow = tk.Frame(sec7, bg=BG); urow.pack(anchor="w", padx=8, pady=6)
+        self.var_auto_upload = tk.BooleanVar(value=False)
+        tk.Checkbutton(urow, text="Tự động đăng sau khi tải", variable=self.var_auto_upload,
+            bg=BG, fg=FG, selectcolor=SURF, activebackground=BG,
+            activeforeground=ACCENT, font=("Segoe UI",10)).pack(side="left", padx=(0,12))
+        tk.Label(urow, text="Nền tảng:", bg=BG, fg=DIM, font=("Segoe UI",9)).pack(side="left", padx=(0,4))
+        self.var_upload_platform = tk.StringVar(value="tiktok")
+        ttk.Combobox(urow, textvariable=self.var_upload_platform, width=10,
+            values=["tiktok","youtube"], state="readonly").pack(side="left")
 
         btn(inner,"💾  Save Config", self._save_config, bg=GREEN, fg=BG).pack(
             anchor="e", padx=14, pady=10)
@@ -469,6 +482,9 @@ class App(tk.Tk):
         for k,v in self.cookie_fields.items(): v.set(cookies.get(k,""))
         db_path = cfg.get("database_path","dy_downloader.db") or "dy_downloader.db"
         self.var_db_path.set(db_path)
+        upload_cfg = cfg.get("upload") or {}
+        self.var_auto_upload.set(bool(upload_cfg.get("auto_upload", False)))
+        self.var_upload_platform.set(str(upload_cfg.get("platform") or "tiktok"))
 
     def _save_config(self):
         cfg = load_cfg()
@@ -488,6 +504,10 @@ class App(tk.Tk):
             "start_time": self.var_start.get(),
             "end_time": self.var_end.get(),
         })
+        upload_cfg = dict(cfg.get("upload") or {})
+        upload_cfg["auto_upload"] = self.var_auto_upload.get()
+        upload_cfg["platform"] = self.var_upload_platform.get()
+        cfg["upload"] = upload_cfg
         save_cfg(cfg)
         self._toast("Config saved ✓")
 
@@ -817,6 +837,144 @@ class App(tk.Tk):
             self._toast("History cleared ✓")
         except Exception as e:
             messagebox.showerror("Error", str(e))
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # TAB 6 — TikTok Upload
+    # ═══════════════════════════════════════════════════════════════════════════
+    def _build_tiktok(self, p):
+        import webbrowser, urllib.request
+
+        # ── Auth section ──────────────────────────────────────────────────────
+        auth_f = section(p, "🔐 TikTok Authentication")
+        auth_f.pack(fill="x", padx=12, pady=(10, 4))
+
+        self._tt_status_var = tk.StringVar(value="Chưa đăng nhập")
+        lbl(auth_f, "Trạng thái:").grid(row=0, column=0, sticky="w", padx=6, pady=4)
+        tk.Label(auth_f, textvariable=self._tt_status_var, bg=SURF, fg=YELLOW,
+                 font=("Segoe UI", 9)).grid(row=0, column=1, sticky="w", padx=6)
+
+        btn(auth_f, "Đăng nhập TikTok", self._tiktok_login).grid(row=0, column=2, padx=6, pady=4)
+        btn(auth_f, "Đăng xuất", self._tiktok_logout, bg=SURF2).grid(row=0, column=3, padx=6, pady=4)
+        btn(auth_f, "Kiểm tra trạng thái", self._tiktok_check_status, bg=SURF2).grid(row=0, column=4, padx=6, pady=4)
+
+        # ── Upload section ────────────────────────────────────────────────────
+        up_f = section(p, "📤 Upload Video")
+        up_f.pack(fill="x", padx=12, pady=4)
+
+        lbl(up_f, "File video:").grid(row=0, column=0, sticky="w", padx=6, pady=4)
+        self._tt_video_var = tk.StringVar()
+        entry(up_f, self._tt_video_var, width=50).grid(row=0, column=1, padx=4, pady=4)
+        btn(up_f, "Chọn file", lambda: self._browse_file(self._tt_video_var), bg=SURF2).grid(row=0, column=2, padx=4)
+
+        lbl(up_f, "Tiêu đề:").grid(row=1, column=0, sticky="w", padx=6, pady=4)
+        self._tt_title_var = tk.StringVar()
+        entry(up_f, self._tt_title_var, width=50).grid(row=1, column=1, padx=4, pady=4)
+
+        lbl(up_f, "Quyền riêng tư:").grid(row=2, column=0, sticky="w", padx=6, pady=4)
+        self._tt_privacy_var = tk.StringVar(value="SELF_ONLY")
+        priv_cb = ttk.Combobox(up_f, textvariable=self._tt_privacy_var, width=20,
+                               values=["SELF_ONLY", "MUTUAL_FOLLOW_FRIENDS", "FOLLOWER_OF_CREATOR", "PUBLIC_TO_EVERYONE"],
+                               state="readonly")
+        priv_cb.grid(row=2, column=1, sticky="w", padx=4, pady=4)
+
+        btn(up_f, "🚀 Upload lên TikTok", self._tiktok_upload).grid(row=3, column=1, sticky="w", padx=4, pady=8)
+
+        # ── Log ───────────────────────────────────────────────────────────────
+        log_f = section(p, "📋 Log")
+        log_f.pack(fill="both", expand=True, padx=12, pady=4)
+        self.tt_log = logbox(log_f, height=12)
+        self.tt_log.pack(fill="both", expand=True, padx=6, pady=4)
+        btn(log_f, "Xóa log", lambda: self._clear_log(self.tt_log), bg=SURF2).pack(anchor="e", padx=6, pady=2)
+
+        # Check status on load
+        self.after(500, self._tiktok_check_status)
+
+    def _tiktok_check_status(self):
+        import urllib.request, json as _j
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:8080/api/tiktok_auth", timeout=5) as r:
+                data = _j.loads(r.read())
+            if data.get("authenticated"):
+                acc = data.get("account", {})
+                self._tt_status_var.set(f"✓ Đã đăng nhập (open_id: {acc.get('open_id','')[:12]}...)")
+            else:
+                self._tt_status_var.set("Chưa đăng nhập")
+        except Exception:
+            self._tt_status_var.set("Không kết nối được server")
+
+    def _tiktok_login(self):
+        import urllib.request, json as _j, webbrowser
+        try:
+            req = urllib.request.Request(
+                "http://127.0.0.1:8080/api/tiktok_auth",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10) as r:
+                data = _j.loads(r.read())
+            auth_url = data.get("auth_url", "")
+            if auth_url:
+                webbrowser.open(auth_url)
+                log_write(self.tt_log, "ℹ  Đã mở trình duyệt để đăng nhập TikTok. Sau khi xong hãy nhấn 'Kiểm tra trạng thái'.\n", "info")
+            else:
+                log_write(self.tt_log, f"✗  {data.get('error','Không lấy được auth URL')}\n", "error")
+        except Exception as e:
+            log_write(self.tt_log, f"✗  Lỗi: {e}\n", "error")
+
+    def _tiktok_logout(self):
+        import urllib.request, json as _j
+        try:
+            req = urllib.request.Request(
+                "http://127.0.0.1:8080/api/tiktok_logout",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5) as r:
+                _j.loads(r.read())
+            self._tt_status_var.set("Chưa đăng nhập")
+            log_write(self.tt_log, "ℹ  Đã đăng xuất TikTok.\n", "info")
+        except Exception as e:
+            log_write(self.tt_log, f"✗  Lỗi: {e}\n", "error")
+
+    def _tiktok_upload(self):
+        video_path = self._tt_video_var.get().strip()
+        if not video_path:
+            messagebox.showwarning("Thiếu file", "Vui lòng chọn file video.")
+            return
+        threading.Thread(target=self._run_tiktok_upload, daemon=True).start()
+
+    def _run_tiktok_upload(self):
+        import urllib.request, json as _j
+        video_path = self._tt_video_var.get().strip()
+        title = self._tt_title_var.get().strip()
+        privacy = self._tt_privacy_var.get().strip()
+
+        payload = _j.dumps({"video_path": video_path, "title": title, "privacy_level": privacy}).encode()
+        self.after(0, log_write, self.tt_log, "▶  Bắt đầu upload...\n", "info")
+        try:
+            req = urllib.request.Request(
+                "http://127.0.0.1:8080/api/tiktok_upload",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=360) as r:
+                for line in r:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        msg = _j.loads(line)
+                        level = msg.get("level", "info")
+                        text = msg.get("log", "")
+                        if text:
+                            self.after(0, log_write, self.tt_log, text + "\n", level)
+                    except Exception:
+                        pass
+        except Exception as e:
+            self.after(0, log_write, self.tt_log, f"✗  Lỗi: {e}\n", "error")
 
     # ═══════════════════════════════════════════════════════════════════════════
     # Shared helpers

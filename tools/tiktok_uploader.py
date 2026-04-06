@@ -230,3 +230,107 @@ class TikTokUploader:
         except Exception as exc:
             self.last_error = str(exc)
             return False
+
+    def upload_video(
+        self,
+        video_path: str,
+        title: str = "",
+        privacy_level: str = "SELF_ONLY",
+        disable_comment: bool = False,
+        disable_duet: bool = False,
+        disable_stitch: bool = False,
+        on_progress=None,
+    ) -> Dict[str, Any]:
+        """Upload a video to TikTok using Content Posting API (file upload flow)."""
+        self.last_error = ""
+
+        def emit(msg: str, level: str = "info"):
+            if on_progress:
+                try:
+                    on_progress({"log": msg, "level": level})
+                except Exception:
+                    pass
+
+        token = self._load_token()
+        if not self._token_valid(token):
+            self.last_error = "Not authenticated with TikTok"
+            emit(f"[TikTok] ✗ {self.last_error}", "error")
+            return {}
+
+        access_token = token["access_token"]
+        video_path = str(video_path)
+        file_size = Path(video_path).stat().st_size
+
+        # Step 1: Init upload
+        emit("[TikTok] Khởi tạo upload...", "info")
+        init_url = "https://open.tiktokapis.com/v2/post/publish/video/init/"
+        init_payload = {
+            "post_info": {
+                "title": title[:150] if title else Path(video_path).stem[:150],
+                "privacy_level": privacy_level,
+                "disable_comment": disable_comment,
+                "disable_duet": disable_duet,
+                "disable_stitch": disable_stitch,
+            },
+            "source_info": {
+                "source": "FILE_UPLOAD",
+                "video_size": file_size,
+                "chunk_size": file_size,
+                "total_chunk_count": 1,
+            },
+        }
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                resp = client.post(
+                    init_url,
+                    json=init_payload,
+                    headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json; charset=UTF-8"},
+                )
+            body = resp.json()
+        except Exception as exc:
+            self.last_error = f"Init upload failed: {exc}"
+            emit(f"[TikTok] ✗ {self.last_error}", "error")
+            return {}
+
+        if resp.status_code >= 400 or body.get("error", {}).get("code", "ok") != "ok":
+            err = body.get("error", {})
+            self.last_error = f"Init failed: {err.get('message', body)}"
+            emit(f"[TikTok] ✗ {self.last_error}", "error")
+            return {}
+
+        data = body.get("data", {})
+        publish_id = data.get("publish_id", "")
+        upload_url = data.get("upload_url", "")
+
+        if not upload_url:
+            self.last_error = "No upload_url returned from TikTok"
+            emit(f"[TikTok] ✗ {self.last_error}", "error")
+            return {}
+
+        # Step 2: Upload file
+        emit("[TikTok] Đang upload video...", "info")
+        try:
+            with open(video_path, "rb") as f:
+                video_bytes = f.read()
+            with httpx.Client(timeout=300.0) as client:
+                upload_resp = client.put(
+                    upload_url,
+                    content=video_bytes,
+                    headers={
+                        "Content-Type": "video/mp4",
+                        "Content-Length": str(file_size),
+                        "Content-Range": f"bytes 0-{file_size - 1}/{file_size}",
+                    },
+                )
+        except Exception as exc:
+            self.last_error = f"File upload failed: {exc}"
+            emit(f"[TikTok] ✗ {self.last_error}", "error")
+            return {}
+
+        if upload_resp.status_code not in (200, 201, 204):
+            self.last_error = f"File upload HTTP {upload_resp.status_code}"
+            emit(f"[TikTok] ✗ {self.last_error}", "error")
+            return {}
+
+        emit("[TikTok] ✓ Upload thành công, đang xử lý...", "success")
+        return {"publish_id": publish_id}
