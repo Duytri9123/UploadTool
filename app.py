@@ -1,15 +1,26 @@
 #!/usr/bin/env python3
 """Douyin Downloader — Flask Web UI"""
-import asyncio, sys, time, threading, json, logging, io
+import asyncio, sys, time, threading, json, logging, io, os, re
 from pathlib import Path
 from datetime import datetime
 import yaml
 from flask import Flask, render_template, request, jsonify, send_file
 from flask_socketio import SocketIO, emit
 
+try:
+    from pyngrok import ngrok
+except Exception:
+    ngrok = None
+
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
 CONFIG_FILE = ROOT / "config.yml"
+TIKTOK_VERIFY_DIR = ROOT / "tiktok_verification"
+LOGGER = logging.getLogger("douyin-webui")
+
+_NGROK_LOCK = threading.Lock()
+_NGROK_PUBLIC_URL = ""
+_NGROK_ERROR = ""
 
 # ── default fallback cookies (not exposed to UI) ──────────────────────────────
 _DEFAULT_COOKIES = {
@@ -59,6 +70,14 @@ socketio = SocketIO(
     ping_timeout=120,       # wait 2 min before declaring client dead
     ping_interval=30,       # ping every 30s to keep connection alive
 )
+
+
+@app.route("/<filename>.txt", methods=["GET"])
+def serve_tiktok_verification_file(filename):
+    verify_path = TIKTOK_VERIFY_DIR / f"{filename}.txt"
+    if not verify_path.exists():
+        return jsonify({"ok": False, "error": "verification file not found"}), 404
+    return send_file(verify_path, mimetype="text/plain; charset=utf-8", as_attachment=False)
 
 _dl_running = False
 _tr_running = False
@@ -157,6 +176,150 @@ def load_cfg():
 def save_cfg(cfg):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False)
+
+
+def _as_bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if text in ("1", "true", "yes", "on"):
+        return True
+    if text in ("0", "false", "no", "off", ""):
+        return False
+    return default
+
+
+def _get_ngrok_settings():
+    cfg = load_cfg()
+    ngrok_cfg = dict(cfg.get("ngrok") or {})
+    enabled = _as_bool(
+        os.getenv("NGROK_ENABLED"),
+        _as_bool(ngrok_cfg.get("enabled"), False),
+    )
+    return {
+        "enabled": enabled,
+        "authtoken": str(os.getenv("NGROK_AUTHTOKEN") or ngrok_cfg.get("authtoken") or "").strip(),
+        "domain": str(os.getenv("NGROK_DOMAIN") or ngrok_cfg.get("domain") or "").strip(),
+        "bind_tls": _as_bool(os.getenv("NGROK_BIND_TLS"), _as_bool(ngrok_cfg.get("bind_tls"), True)),
+    }
+
+
+def _save_ngrok_public_url(public_url: str):
+    cfg = load_cfg()
+    ngrok_cfg = dict(cfg.get("ngrok") or {})
+    ngrok_cfg["public_url"] = public_url
+    cfg["ngrok"] = ngrok_cfg
+    save_cfg(cfg)
+
+
+def _start_ngrok_tunnel(port: int):
+    global _NGROK_PUBLIC_URL, _NGROK_ERROR
+    settings = _get_ngrok_settings()
+    if not settings.get("enabled"):
+        return
+
+    with _NGROK_LOCK:
+        if _NGROK_PUBLIC_URL:
+            return
+
+        if ngrok is None:
+            _NGROK_ERROR = "pyngrok is not installed. Run: pip install pyngrok"
+            LOGGER.warning(_NGROK_ERROR)
+            return
+
+        if not settings["authtoken"]:
+            _NGROK_ERROR = (
+                "Ngrok requires a verified account and authtoken. "
+                "Set ngrok.authtoken in config.yml or NGROK_AUTHTOKEN env."
+            )
+            LOGGER.warning(_NGROK_ERROR)
+            return
+
+        try:
+            if settings["authtoken"]:
+                ngrok.set_auth_token(settings["authtoken"])
+
+            options = {
+                "addr": str(port),
+                "bind_tls": settings["bind_tls"],
+            }
+            if settings["domain"]:
+                options["domain"] = settings["domain"]
+
+            tunnel = ngrok.connect(**options)
+            _NGROK_PUBLIC_URL = str(getattr(tunnel, "public_url", "") or "").strip()
+            if _NGROK_PUBLIC_URL:
+                _NGROK_ERROR = ""
+                _save_ngrok_public_url(_NGROK_PUBLIC_URL)
+                LOGGER.info("Ngrok tunnel started: %s", _NGROK_PUBLIC_URL)
+        except Exception as exc:
+            raw_err = str(exc)
+            token = settings.get("authtoken") or ""
+            if token:
+                raw_err = raw_err.replace(token, "***REDACTED***")
+            raw_err = re.sub(r"(Your authtoken:\s*)(\S+)", r"\1***REDACTED***", raw_err)
+            _NGROK_ERROR = raw_err
+            LOGGER.error("Failed to start ngrok tunnel: %s", _NGROK_ERROR)
+
+
+def _public_base_url(host: str, port: int) -> str:
+    if _NGROK_PUBLIC_URL:
+        return _NGROK_PUBLIC_URL
+    cfg = load_cfg()
+    fallback_url = str(((cfg.get("ngrok") or {}).get("public_url") or "")).strip()
+    if fallback_url:
+        return fallback_url
+    return f"http://{host}:{port}"
+
+
+def _get_tiktok_credentials(host: str = "127.0.0.1", port: int = 8080):
+    cfg = load_cfg()
+    upload_cfg = dict(cfg.get("upload") or {})
+    tiktok_cfg = dict(upload_cfg.get("tiktok") or {})
+
+    client_key_env = str(tiktok_cfg.get("client_key_env") or "TIKTOK_CLIENT_KEY").strip()
+    client_secret_env = str(tiktok_cfg.get("client_secret_env") or "TIKTOK_CLIENT_SECRET").strip()
+
+    client_key = str(os.getenv(client_key_env) or tiktok_cfg.get("client_key") or "").strip()
+    client_secret = str(os.getenv(client_secret_env) or tiktok_cfg.get("client_secret") or "").strip()
+    redirect_uri = str(tiktok_cfg.get("redirect_uri") or "").strip()
+    if not redirect_uri:
+        redirect_uri = f"{_public_base_url(host, port)}/api/tiktok/callback"
+
+    return {
+        "client_key": client_key,
+        "client_secret": client_secret,
+        "redirect_uri": redirect_uri,
+        "client_key_env": client_key_env,
+        "client_secret_env": client_secret_env,
+    }
+
+
+def _get_tiktok_scopes():
+    cfg = load_cfg()
+    tiktok_cfg = dict(((cfg.get("upload") or {}).get("tiktok") or {}))
+    scopes = tiktok_cfg.get("scopes")
+    if isinstance(scopes, str):
+        scopes = [s.strip() for s in scopes.split(",") if s.strip()]
+    if isinstance(scopes, list):
+        cleaned = [str(s).strip() for s in scopes if str(s).strip()]
+        if cleaned:
+            return cleaned
+    return ["user.info.basic", "video.publish"]
+
+
+_tiktok_uploader = None
+
+
+def _get_tiktok_uploader():
+    global _tiktok_uploader
+    if _tiktok_uploader is None:
+        from tools.tiktok_uploader import TikTokUploader
+
+        _tiktok_uploader = TikTokUploader()
+    return _tiktok_uploader
 
 
 def _deep_merge_dict(base, updates):
@@ -329,6 +492,169 @@ def post_config():
     cfg = _deep_merge_dict(cfg, data)
     save_cfg(cfg)
     return jsonify({"ok": True})
+
+
+@app.route("/api/ngrok/status", methods=["GET"])
+def ngrok_status():
+    host = "127.0.0.1"
+    port = 8080
+    settings = _get_ngrok_settings()
+    if settings.get("enabled") and not _NGROK_PUBLIC_URL:
+        _start_ngrok_tunnel(port)
+    public_url = _public_base_url(host, port)
+    return jsonify(
+        {
+            "ok": True,
+            "enabled": bool(settings.get("enabled")),
+            "public_url": public_url,
+            "tunnel_active": bool(_NGROK_PUBLIC_URL),
+            "local_url": f"http://{host}:{port}",
+            "tiktok_callback_url": f"{public_url}/api/tiktok/callback",
+            "error": _NGROK_ERROR,
+        }
+    )
+
+
+@app.route("/api/tiktok/callback", methods=["GET", "POST"])
+def tiktok_callback():
+    query = request.args.to_dict(flat=True)
+    payload = request.get_json(silent=True) or {}
+    LOGGER.info("TikTok callback query=%s payload=%s", query, payload)
+
+    # OAuth callback path (TikTok Login Kit / Content Posting API)
+    code = str(query.get("code") or payload.get("code") or "").strip()
+    state = str(query.get("state") or payload.get("state") or "").strip()
+    if code:
+        creds = _get_tiktok_credentials("127.0.0.1", 8080)
+        uploader = _get_tiktok_uploader()
+        ok = uploader.complete_auth_callback(
+            code=code,
+            state=state,
+            client_key=creds.get("client_key", ""),
+            client_secret=creds.get("client_secret", ""),
+            redirect_uri=creds.get("redirect_uri", ""),
+        )
+        if ok:
+            return """
+<!doctype html>
+<html><head><meta charset="utf-8"><title>TikTok Connected</title></head>
+<body style="font-family:Arial,sans-serif;padding:24px;line-height:1.5;">
+    <h3>TikTok connected successfully.</h3>
+    <p>You can close this window and return to the app.</p>
+    <script>
+        try { window.close(); } catch (e) {}
+    </script>
+</body></html>
+"""
+
+        err = str(getattr(uploader, "last_error", "") or "OAuth callback failed")
+        return f"""
+<!doctype html>
+<html><head><meta charset=\"utf-8\"><title>TikTok OAuth Error</title></head>
+<body style=\"font-family:Arial,sans-serif;padding:24px;line-height:1.5;\">
+    <h3>Failed to connect TikTok.</h3>
+    <p>{err}</p>
+    <p>Please close this window and click \"Đăng nhập TikTok\" again.</p>
+</body></html>
+""", 400
+
+    # Webhook/domain verification challenge path.
+    challenge = query.get("challenge") or query.get("hub.challenge")
+    if challenge:
+        return jsonify({"ok": True, "challenge": challenge})
+    return jsonify({"ok": True, "received": True})
+
+
+@app.route("/api/tiktok/credentials_status", methods=["GET"])
+def tiktok_credentials_status():
+    host = "127.0.0.1"
+    port = 8080
+    creds = _get_tiktok_credentials(host, port)
+    return jsonify(
+        {
+            "ok": True,
+            "has_client_key": bool(creds.get("client_key")),
+            "has_client_secret": bool(creds.get("client_secret")),
+            "client_key_env": creds.get("client_key_env"),
+            "client_secret_env": creds.get("client_secret_env"),
+            "redirect_uri": creds.get("redirect_uri"),
+            "callback_url": f"{_public_base_url(host, port)}/api/tiktok/callback",
+        }
+    )
+
+
+@app.route("/api/tiktok_auth", methods=["GET", "POST"])
+def tiktok_auth():
+    creds = _get_tiktok_credentials("127.0.0.1", 8080)
+    uploader = _get_tiktok_uploader()
+    client_key = str(creds.get("client_key") or "").strip()
+    client_secret = str(creds.get("client_secret") or "").strip()
+
+    if not client_key or not client_secret:
+        return jsonify(
+            {
+                "ok": False,
+                "authenticated": False,
+                "error_code": "missing_tiktok_credentials",
+                "error": "Missing TikTok client_key/client_secret",
+            }
+        ), 400
+
+    if request.method == "POST":
+        uploader.revoke_auth()
+        auth_url = uploader.get_auth_url(
+            client_key=client_key,
+            redirect_uri=creds.get("redirect_uri", ""),
+            scopes=_get_tiktok_scopes(),
+        )
+        if not auth_url:
+            return jsonify(
+                {
+                    "ok": False,
+                    "authenticated": False,
+                    "error_code": "auth_url_unavailable",
+                    "error": str(getattr(uploader, "last_error", "") or "Unable to start TikTok OAuth"),
+                }
+            ), 400
+        return jsonify({"ok": True, "authenticated": False, "auth_url": auth_url})
+
+    if uploader.authenticate(client_key, client_secret):
+        status = uploader.get_auth_status()
+        return jsonify(
+            {
+                "ok": True,
+                "authenticated": True,
+                "account": {
+                    "open_id": status.get("open_id", ""),
+                    "scope": status.get("scope", ""),
+                    "expires_at": status.get("expires_at", 0),
+                },
+            }
+        )
+
+    auth_url = uploader.get_auth_url(
+        client_key=client_key,
+        redirect_uri=creds.get("redirect_uri", ""),
+        scopes=_get_tiktok_scopes(),
+    )
+    if not auth_url:
+        return jsonify(
+            {
+                "ok": False,
+                "authenticated": False,
+                "error_code": "auth_url_unavailable",
+                "error": str(getattr(uploader, "last_error", "") or "Unable to prepare TikTok OAuth"),
+            }
+        ), 400
+    return jsonify({"ok": True, "authenticated": False, "auth_url": auth_url})
+
+
+@app.route("/api/tiktok_logout", methods=["POST"])
+def tiktok_logout():
+    uploader = _get_tiktok_uploader()
+    if uploader.revoke_auth():
+        return jsonify({"ok": True, "message": "Logged out from TikTok"})
+    return jsonify({"ok": False, "error": str(getattr(uploader, "last_error", "") or "Failed to logout")}), 500
 
 @app.route("/api/cookies", methods=["POST"])
 def post_cookies():
@@ -1399,12 +1725,36 @@ def youtube_upload():
     import json as _j
     from flask import Response, stream_with_context
     
-    data = request.json or {}
-    video_path = str(data.get("video_path") or "").strip()
-    title = str(data.get("title") or "").strip()
-    description = str(data.get("description") or "").strip()
-    tags = data.get("tags") or []
-    privacy_status = str(data.get("privacy_status") or "private").strip().lower()
+    # Handle both JSON and FormData requests
+    is_temp_file = False
+    if request.is_json:
+        data = request.json or {}
+        video_path = str(data.get("video_path") or "").strip()
+        title = str(data.get("title") or "").strip()
+        description = str(data.get("description") or "").strip()
+        tags = data.get("tags") or []
+        privacy_status = str(data.get("privacy_status") or "private").strip().lower()
+    else:
+        # Handle FormData
+        video_file = request.files.get("video_file")
+        if video_file:
+            # Save the uploaded file temporarily
+            temp_dir = _Path("temp_uploads")
+            temp_dir.mkdir(exist_ok=True)
+            video_path = temp_dir / video_file.filename
+            video_file.save(str(video_path))
+            is_temp_file = True
+        else:
+            video_path = str(request.form.get("video_path") or "").strip()
+        
+        title = str(request.form.get("title") or "").strip()
+        description = str(request.form.get("description") or "").strip()
+        tags_str = request.form.get("tags") or "[]"
+        try:
+            tags = _j.loads(tags_str)
+        except:
+            tags = []
+        privacy_status = str(request.form.get("privacy_status") or "private").strip().lower()
 
     if not title and video_path:
         title = _Path(video_path).stem
@@ -1450,6 +1800,13 @@ def youtube_upload():
                 yield send(log="[YouTube] ✗ Upload thất bại", level="error")
         except Exception as e:
             yield send(log=f"[YouTube] ✗ Lỗi: {str(e)}", level="error")
+        finally:
+            # Clean up temp file if it was uploaded
+            if is_temp_file and video_path.exists():
+                try:
+                    video_path.unlink()
+                except:
+                    pass
     
     return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
 
@@ -1466,6 +1823,12 @@ if __name__ == "__main__":
     import webbrowser, time
     APP_HOST = "127.0.0.1"
     APP_PORT = 8080
+    _start_ngrok_tunnel(APP_PORT)
+    if _NGROK_PUBLIC_URL:
+        print(f"[ngrok] Public URL: {_NGROK_PUBLIC_URL}")
+        print(f"[ngrok] TikTok callback: {_NGROK_PUBLIC_URL}/api/tiktok/callback")
+    elif _NGROK_ERROR:
+        print(f"[ngrok] Error: {_NGROK_ERROR}")
     threading.Thread(target=_preload_whisper_model, daemon=True).start()
     threading.Timer(1.2, lambda: webbrowser.open(f"http://localhost:{APP_PORT}")).start()
     socketio.run(app, host=APP_HOST, port=APP_PORT, debug=False)

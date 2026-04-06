@@ -47,3 +47,4 @@ config/cookies.json
 client_secrets.json
 youtube_token.json
 .youtube_tokens/
+.tiktok_tokens/

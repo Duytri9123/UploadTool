@@ -1439,6 +1439,10 @@ def process_video_full(data: dict) -> Generator[str, None, None]:
         except Exception as e:
             yield send(log=f"[Bước 4/4] ✗ Lỗi tạo giọng: {e}", level="error")
 
+    if not final_output_path:
+        final_output_path = video_path.resolve()
+        yield send(log="[Hoàn tất] Không có bước chỉnh sửa nào, dùng lại file gốc", level="info", file_path=str(final_output_path))
+
     if cleanup_outputs and final_output_path and final_output_path.exists():
         for extra in (source_srt_path, srt_path, ass_path, vi_ass_path, burned_path):
             try:
