@@ -843,6 +843,21 @@ class BaseDownloader(ABC):
                     return
                 caption_tpl = str(tiktok_cfg.get("caption_template") or tiktok_cfg.get("title_template") or "{title}")
                 caption = caption_tpl.replace("{title}", title)
+                
+                # Extract hashtags from filename
+                import re
+                stem = video_path.stem
+                chinese_parts = re.findall(r'[\u4e00-\u9fff\u3400-\u4dbf][^\u0000-\u007F_]*', stem)
+                hashtags = []
+                if chinese_parts:
+                    try:
+                        hashtags = ['#' + part.replace(' ', '').lower() for part in chinese_parts]
+                    except:
+                        hashtags = ['#' + part.replace(' ', '') for part in chinese_parts]
+                
+                if hashtags:
+                    caption += ' ' + ' '.join(hashtags)
+                
                 privacy = str(tiktok_cfg.get("privacy_status") or "SELF_ONLY").upper()
                 privacy_map = {"private": "SELF_ONLY", "public": "PUBLIC_TO_EVERYONE", "friends": "MUTUAL_FOLLOW_FRIENDS"}
                 privacy = privacy_map.get(privacy.lower(), privacy)
@@ -872,11 +887,31 @@ class BaseDownloader(ABC):
                 desc_tpl = str(yt_cfg.get("description_template") or "{title}")
                 yt_desc = desc_tpl.replace("{title}", title)
                 privacy = str(yt_cfg.get("privacy_status") or "private")
+                is_short = bool(yt_cfg.get("short", False))
+                
+                # Extract hashtags from filename
+                import re
+                stem = video_path.stem
+                chinese_parts = re.findall(r'[\u4e00-\u9fff\u3400-\u4dbf][^\u0000-\u007F_]*', stem)
+                hashtags = []
+                if chinese_parts:
+                    # Try to translate, fallback to original
+                    try:
+                        # For simplicity, use original Chinese as hashtags
+                        hashtags = ['#' + part.replace(' ', '').lower() for part in chinese_parts]
+                    except:
+                        hashtags = ['#' + part.replace(' ', '') for part in chinese_parts]
+                
+                default_tags = ['douyin', 'tiktok', 'video']
+                all_tags = default_tags + [h[1:] for h in hashtags]  # remove #
+                
                 result = uploader.upload_video(
                     video_path=video_path,
                     title=yt_title,
                     description=yt_desc,
+                    tags=all_tags,
                     privacy_status=privacy,
+                    is_short=is_short,
                     on_progress=lambda s: logger.info("YouTube upload: %s", s),
                 )
                 if result:
@@ -994,19 +1029,34 @@ class BaseDownloader(ABC):
         if burn_original_subs and srt_path and srt_path.exists():
             self._progress_post(75, "Đang burn phụ đề")
             out_video = out_dir / f"{post_title}_processed.mp4"
+            # Đồng bộ blur_zone với subtitle_position nếu blur_zone là mặc định hoặc rỗng
+            subtitle_position = vp_cfg.get("subtitle_position", "bottom")
+            blur_zone = vp_cfg.get("blur_zone")
+            if not blur_zone or blur_zone == "default":
+                blur_zone = subtitle_position
+            # Đồng bộ margin_v với subtitle_position nếu margin_v là mặc định hoặc rỗng
+            margin_v = vp_cfg.get("margin_v")
+            if margin_v is None or str(margin_v).strip() == "":
+                if subtitle_position == "top":
+                    margin_v = 60
+                else:
+                    margin_v = 20
+            else:
+                margin_v = int(margin_v)
             ok, err = burn_subtitles(
                 video_path=video_path,
                 srt_path=srt_path,
                 output_path=out_video,
                 ffmpeg=ffmpeg,
                 blur_original=vp_cfg.get("blur_original", True),
-                blur_zone=vp_cfg.get("blur_zone", "bottom"),
+                blur_zone=blur_zone,
                 blur_height_pct=float(vp_cfg.get("blur_height_pct", 15)) / 100,
                 font_size=int(vp_cfg.get("font_size", 18)),
                 font_color=vp_cfg.get("font_color", "white"),
                 outline_color=vp_cfg.get("outline_color", "black"),
                 outline_width=int(vp_cfg.get("outline_width", 2)),
-                margin_v=int(vp_cfg.get("margin_v", 30)),
+                margin_v=margin_v,
+                subtitle_position=subtitle_position,
             )
             if ok:
                 processed_path = out_video
@@ -1022,6 +1072,9 @@ class BaseDownloader(ABC):
             self._progress_post(90, "Đang tạo giọng tiếng Việt")
             source = processed_path if processed_path else video_path
             voice_out = out_dir / f"{post_title}_vi_voice.mp4"
+            # Lấy đúng engine và voice từ config
+            tts_voice = vp_cfg.get("tts_voice") or "vi-VN-HoaiMyNeural"
+            tts_engine = vp_cfg.get("tts_engine") or "edge-tts"
             try:
                 ok, err = await convert_voice(
                     video_path=source,
@@ -1029,14 +1082,14 @@ class BaseDownloader(ABC):
                     translated_texts=translated_texts,
                     output_path=voice_out,
                     ffmpeg=ffmpeg,
-                    tts_voice=vp_cfg.get("tts_voice", "vi-VN-HoaiMyNeural"),
-                    tts_engine=vp_cfg.get("tts_engine", "edge-tts"),
+                    tts_voice=tts_voice,
+                    tts_engine=tts_engine,
                     keep_bg_music=vp_cfg.get("keep_bg_music", vp_cfg.get("keep_bg", True)),
                     bg_volume=float(vp_cfg.get("bg_volume", 0.15)),
                 )
                 if ok:
                     logger.info("video_process: voice converted → %s", voice_out.name)
-                    self._progress_post(100, "Đã tạo giọng tiếng Việt")
+                    self._progress_post(100, f"Đã tạo giọng tiếng Việt ({tts_engine}, {tts_voice})")
                 else:
                     logger.warning("video_process: voice conversion failed for %s: %s", aweme_id, err)
                     self._progress_post(100, "Đổi giọng thất bại")

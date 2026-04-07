@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 video_processor.py — Xử lý video sau khi tải:
   1. Burn subtitles (SRT → hardcode vào video)
@@ -11,6 +11,7 @@ Yêu cầu:
 """
 import asyncio
 import json
+import logging
 import os
 import re
 import shutil
@@ -138,6 +139,173 @@ def has_audio_track(video_path: Path, ffmpeg: str) -> bool:
         return False
 
 
+# ── Image path helper ─────────────────────────────────────────────────────────
+_SUPPORTED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+
+
+def _resolve_image_path(image_path: str, project_root: Path) -> Optional[Path]:
+    """
+    Resolve đường dẫn ảnh (tuyệt đối hoặc tương đối so với project root).
+    Kiểm tra định dạng hợp lệ (PNG, JPG, JPEG, WEBP).
+    Returns None nếu không hợp lệ.
+    """
+    if not image_path:
+        return None
+    p = Path(image_path)
+    if not p.is_absolute():
+        p = project_root / p
+    if not p.exists():
+        return None
+    if p.suffix.lower() not in _SUPPORTED_IMAGE_EXTS:
+        return None
+    return p
+
+
+# ── Anti-fingerprint filter builder ──────────────────────────────────────────
+_LOGO_POSITION_MAP = {
+    "top-left":     ("{P}", "{P}"),
+    "top-right":    ("W-w-{P}", "{P}"),
+    "bottom-left":  ("{P}", "H-h-{P}"),
+    "bottom-right": ("W-w-{P}", "H-h-{P}"),
+}
+
+
+def _build_anti_fingerprint_filter(
+    has_overlay: bool,
+    overlay_opacity: float,
+    has_logo: bool,
+    logo_position: str,
+    logo_max_width_pct: float,
+    logo_padding: int,
+    logo_opacity: float,
+    n_extra_inputs: int,
+) -> tuple[str, list[str]]:
+    """
+    Xây dựng filter_complex string cho anti-fingerprint.
+
+    Returns:
+        (filter_complex_str, ["[vout]"])
+    """
+    P = logo_padding
+
+    # Resolve logo position (fallback to bottom-left if invalid)
+    pos_template = _LOGO_POSITION_MAP.get(logo_position, _LOGO_POSITION_MAP["bottom-left"])
+    logo_x = pos_template[0].replace("{P}", str(P))
+    logo_y = pos_template[1].replace("{P}", str(P))
+
+    if has_overlay and not has_logo:
+        # Only overlay — scale overlay to match video size, then blend with opacity
+        fc = (
+            f"[1:v][0:v]scale2ref[ov][base];"
+            f"[ov]format=rgba,colorchannelmixer=aa={overlay_opacity}[ov_alpha];"
+            f"[base][ov_alpha]overlay=0:0[vout]"
+        )
+    elif has_logo and not has_overlay:
+        # Only logo — scale to % of video width, keep aspect ratio
+        fc = (
+            f"[0:v][1:v]scale2ref[base][logo_ref];"
+            f"[logo_ref]scale=iw*{logo_max_width_pct}:h=-2[logo_scaled];"
+            f"[logo_scaled]format=rgba,colorchannelmixer=aa={logo_opacity}[logo_alpha];"
+            f"[base][logo_alpha]overlay={logo_x}:{logo_y}[vout]"
+        )
+    else:
+        # Both overlay + logo — overlay is input 1, logo is input 2
+        fc = (
+            f"[1:v][0:v]scale2ref[ov][base];"
+            f"[ov]format=rgba,colorchannelmixer=aa={overlay_opacity}[ov_alpha];"
+            f"[base][ov_alpha]overlay=0:0[with_ov];"
+            f"[with_ov][2:v]scale2ref=w=iw*{logo_max_width_pct}:h=-2[logo_scaled][base2];"
+            f"[logo_scaled]format=rgba,colorchannelmixer=aa={logo_opacity}[logo_alpha];"
+            f"[base2][logo_alpha]overlay={logo_x}:{logo_y}[vout]"
+        )
+
+    return fc, ["[vout]"]
+
+
+# ── Anti-fingerprint main function ────────────────────────────────────────────
+def apply_anti_fingerprint(
+    video_path: Path,
+    output_path: Path,
+    ffmpeg: str,
+    overlay_image: Optional[str] = None,
+    overlay_opacity: float = 0.02,
+    logo_image: Optional[str] = None,
+    logo_enabled: bool = True,
+    logo_position: str = "bottom-left",
+    logo_max_width_pct: float = 0.15,
+    logo_opacity: float = 1.0,
+    logo_padding: int = 10,
+) -> tuple[bool, str]:
+    """
+    Áp dụng overlay ảnh bán trong suốt và/hoặc logo thương hiệu vào video.
+    Thực hiện trong một lần encode ffmpeg duy nhất (filter_complex).
+
+    Returns:
+        (True, "") nếu thành công
+        (False, error_msg) nếu thất bại
+    """
+    logger = logging.getLogger(__name__)
+    project_root = Path(__file__).parent.parent
+
+    # Resolve overlay image
+    overlay_path: Optional[Path] = None
+    if overlay_image:
+        overlay_path = _resolve_image_path(overlay_image, project_root)
+        if overlay_path is None:
+            logger.warning("apply_anti_fingerprint: overlay_image không hợp lệ hoặc không tồn tại: %s", overlay_image)
+
+    # Resolve logo image
+    logo_path: Optional[Path] = None
+    if logo_image and logo_enabled:
+        logo_path = _resolve_image_path(logo_image, project_root)
+        if logo_path is None:
+            logger.warning("apply_anti_fingerprint: logo_image không hợp lệ hoặc không tồn tại: %s", logo_image)
+    elif logo_image and not logo_enabled:
+        logger.info("apply_anti_fingerprint: logo_enabled=false, bỏ qua logo_image")
+
+    has_overlay = overlay_path is not None
+    has_logo = logo_enabled and (logo_path is not None)
+
+    if not has_overlay and not has_logo:
+        return False, "no valid images"
+
+    # Build ffmpeg command
+    cmd = [ffmpeg, "-y", "-i", str(video_path)]
+    if has_overlay:
+        cmd += ["-i", str(overlay_path)]
+    if has_logo:
+        cmd += ["-i", str(logo_path)]
+
+    n_extra_inputs = (1 if has_overlay else 0) + (1 if has_logo else 0)
+
+    filter_str, _ = _build_anti_fingerprint_filter(
+        has_overlay=has_overlay,
+        overlay_opacity=overlay_opacity,
+        has_logo=has_logo,
+        logo_position=logo_position,
+        logo_max_width_pct=logo_max_width_pct,
+        logo_opacity=logo_opacity,
+        logo_padding=logo_padding,
+        n_extra_inputs=n_extra_inputs,
+    )
+
+    cmd += [
+        "-filter_complex", filter_str,
+        "-map", "[vout]",
+        "-map", "0:a?",
+        "-c:a", "copy",
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-crf", "23",
+        str(output_path),
+    ]
+
+    ok, err = run_ffmpeg(cmd)
+    if ok:
+        return True, ""
+    return False, err
+
+
 # ── SRT helpers ───────────────────────────────────────────────────────────────
 def _fmt_srt_time(seconds: float) -> str:
     h, r = divmod(seconds, 3600)
@@ -182,12 +350,46 @@ Style: Default,Arial,{font_size},{primary},&H000000FF,{outline},{shadow_c},0,0,0
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
+
+    def split_text_to_lines(text, maxlen=40):
+        # Ưu tiên tách theo dấu câu, nếu không thì cắt theo độ dài
+        import re
+        # Tách theo dấu câu
+        sentences = re.split(r'(?<=[.!?…。！？])\s*', text)
+        result = []
+        for sent in sentences:
+            sent = sent.strip()
+            if not sent:
+                continue
+            # Nếu câu quá dài, cắt nhỏ hơn nữa
+            while len(sent) > maxlen:
+                # Tìm vị trí cách gần maxlen nhất
+                idx = sent.rfind(' ', 0, maxlen)
+                if idx == -1:
+                    idx = maxlen
+                result.append(sent[:idx].strip())
+                sent = sent[idx:].strip()
+            if sent:
+                result.append(sent)
+        return result
+
     lines = [header]
     for seg in segments:
         start = _fmt_ass_time(seg["start"])
         end   = _fmt_ass_time(seg["end"])
-        text  = seg.get("text", "").replace("\n", "\\N")
-        lines.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}")
+        text  = seg.get("text", "").replace("\n", " ")
+        split_lines = split_text_to_lines(text, maxlen=40)
+        n = len(split_lines)
+        if n == 0:
+            continue
+        # Chia đều thời gian cho các dòng nhỏ
+        seg_duration = (seg["end"] - seg["start"]) / n
+        for i, line in enumerate(split_lines):
+            sub_start = seg["start"] + i * seg_duration
+            sub_end = seg["start"] + (i+1) * seg_duration - 0.01
+            s = _fmt_ass_time(sub_start)
+            e = _fmt_ass_time(sub_end)
+            lines.append(f"Dialogue: 0,{s},{e},Default,,0,0,0,,{line}")
 
     out_path = Path(out_path)
     out_path.write_text("\n".join(lines), encoding="utf-8")
@@ -449,16 +651,35 @@ def burn_subtitles(
     If subtitle_format='ass': use ASS filter (no blur needed, faster).
     If subtitle_format='srt': use SRT with optional blur strip.
     """
-    # ASS path — fast, supports blur
+    # Tự động căn giữa vùng che blur với phụ đề
+    blur_lift_pct_adj = blur_lift_pct
+    if blur_original and blur_zone != "none":
+        # Giả sử subtitle nằm ở bottom, tính toán lại vị trí vùng che để căn giữa phụ đề
+        # margin_v: pixel, font_size: pixel, outline_width: pixel
+        # Giả sử video cao 1080px, tính theo tỉ lệ
+        video_height = 1080
+        sub_height = font_size + 2 * outline_width
+        # Khoảng cách từ mép dưới lên baseline phụ đề
+        if subtitle_position == "bottom":
+            sub_y = video_height - margin_v - sub_height // 2
+            blur_h = int(video_height * blur_height_pct)
+            blur_y = sub_y - blur_h // 2
+            blur_lift_pct_adj = max(0.0, 1.0 - (blur_y + blur_h) / video_height)
+        elif subtitle_position == "top":
+            sub_y = margin_v + sub_height // 2
+            blur_h = int(video_height * blur_height_pct)
+            blur_y = sub_y - blur_h // 2
+            blur_lift_pct_adj = max(0.0, blur_y / video_height)
+
     if str(subtitle_format).lower() == "ass":
         return _burn_ass(video_path, srt_path, output_path, ffmpeg,
                          font_size, font_color, outline_color, outline_width,
                          margin_v, subtitle_position,
-                         blur_original, blur_zone, blur_height_pct, blur_width_pct, blur_lift_pct)
+                         blur_original, blur_zone, blur_height_pct, blur_width_pct, blur_lift_pct_adj)
 
     # SRT path (original logic)
     return _burn_srt(video_path, srt_path, output_path, ffmpeg,
-                     blur_original, blur_zone, blur_height_pct, blur_width_pct, blur_lift_pct,
+                     blur_original, blur_zone, blur_height_pct, blur_width_pct, blur_lift_pct_adj,
                      font_size, font_color, outline_color, outline_width,
                      margin_v, subtitle_position)
 
@@ -681,30 +902,30 @@ def _hex_color(name: str) -> str:
 # MultiProviderTTS
 # ══════════════════════════════════════════════════════════════════════════════
 class MultiProviderTTS:
-    """Multi-provider TTS with Edge-TTS as primary and gTTS as fallback."""
+    """Multi-provider TTS: FPT AI, OpenAI, Edge-TTS, gTTS."""
 
     def __init__(
         self,
-        voice: str = "vi-VN-HoaiMyNeural",
-        engine: str = "edge-tts",
+        voice: str = "banmai",
+        engine: str = "fpt-ai",
         fpt_api_key: str = "",
         fpt_speed: int = 0,
+        openai_api_key: str = "",
+        openai_model: str = "tts-1",
     ):
         self.voice = voice
         self.engine = engine
         self.fpt_api_key = (fpt_api_key or "").strip()
         self.fpt_speed = int(fpt_speed)
+        self.openai_api_key = (openai_api_key or "").strip()
+        self.openai_model = openai_model or "tts-1"
 
     async def generate(self, text: str, out_path: Path) -> bool:
-        """
-        Generate TTS audio for text, writing to out_path.
-        Tries Edge-TTS first, falls back to gTTS.
-        Returns False (without raising) if both providers fail.
-        """
+        """Generate TTS audio. Returns False if all providers fail."""
         out_path = Path(out_path)
+        engine = str(self.engine).strip().lower()
 
-        # Explicit engine selection
-        if str(self.engine).strip().lower() == "fpt-ai":
+        if engine == "fpt-ai":
             try:
                 ok = await _tts_fpt_ai(text, self.voice, out_path, self.fpt_api_key, self.fpt_speed)
                 if ok:
@@ -712,15 +933,38 @@ class MultiProviderTTS:
             except Exception:
                 pass
 
-        # Try Edge-TTS first
-        try:
-            ok = await _tts_edge(text, self.voice, out_path)
-            if ok:
-                return True
-        except Exception:
-            pass
+        elif engine == "openai-tts":
+            try:
+                ok = await _tts_openai(text, self.voice, out_path, self.openai_api_key, self.openai_model)
+                if ok:
+                    return True
+            except Exception:
+                pass
 
-        # Fallback to gTTS
+        elif engine == "edge-tts":
+            try:
+                ok = await _tts_edge(text, self.voice, out_path)
+                if ok:
+                    return True
+            except Exception:
+                pass
+
+        elif engine == "gtts":
+            try:
+                ok = _tts_gtts(text, "vi", out_path)
+                if ok:
+                    return True
+            except Exception:
+                pass
+
+        # Fallback chain: edge-tts → gtts
+        if engine not in ("edge-tts",):
+            try:
+                ok = await _tts_edge(text, self.voice if engine == "edge-tts" else "vi-VN-HoaiMyNeural", out_path)
+                if ok:
+                    return True
+            except Exception:
+                pass
         try:
             ok = _tts_gtts(text, "vi", out_path)
             if ok:
@@ -740,6 +984,7 @@ class MultiProviderTTS:
         tts_speed: float = 1.0,
         auto_speed: bool = True,
         ffmpeg: str = "ffmpeg",
+        pitch_semitones: float = 0.0,
     ) -> list[dict]:
         """
         Generate TTS for all segments with bounded concurrency.
@@ -764,13 +1009,46 @@ class MultiProviderTTS:
                             tts_dur = _get_audio_duration(ffmpeg, out_path)
                             if tts_dur > 0 and seg_dur > 0:
                                 auto = tts_dur / seg_dur
-                                auto = max(0.5, min(3.0, auto))
-                                speed = max(0.5, min(3.0, auto * speed))
+                                auto = max(1.0, min(3.0, auto))
+                                speed = max(1.0, min(3.0, auto * speed))
                         if abs(speed - 1.0) > 0.05:
                             sped_path = tmpdir / f"tts_{i:04d}_fast.mp3"
                             _apply_atempo(ffmpeg, out_path, sped_path, speed)
                             if sped_path.exists() and sped_path.stat().st_size > 0:
                                 out_path = sped_path
+                        # Apply pitch shift - giữ nguyên tốc độ
+                        if abs(pitch_semitones) > 0.05:
+                            pitched_path = tmpdir / f"tts_{i:04d}_pitched.mp3"
+                            wav_in = tmpdir / f"tts_{i:04d}_in.wav"
+                            wav_out = tmpdir / f"tts_{i:04d}_out.wav"
+                            import subprocess as _sp
+                            _sp.run([ffmpeg, "-i", str(out_path), "-ar", "44100", "-ac", "1",
+                                str(wav_in), "-y", "-loglevel", "error"], capture_output=True)
+                            if wav_in.exists():
+                                # Thử rubberband trước
+                                r = _sp.run([ffmpeg, "-i", str(wav_in),
+                                    "-filter:a", f"rubberband=pitch={2**(pitch_semitones/12):.6f}",
+                                    str(wav_out), "-y", "-loglevel", "error"], capture_output=True)
+                                if not (wav_out.exists() and wav_out.stat().st_size > 0):
+                                    # Fallback: asetrate + atempo
+                                    factor = 2 ** (pitch_semitones / 12)
+                                    new_rate = int(44100 * factor)
+                                    tempo = 1.0 / factor
+                                    tempo_filters = []
+                                    t = tempo
+                                    while t < 0.5:
+                                        tempo_filters.append("atempo=0.5"); t *= 2.0
+                                    while t > 2.0:
+                                        tempo_filters.append("atempo=2.0"); t /= 2.0
+                                    tempo_filters.append(f"atempo={t:.6f}")
+                                    f = f"asetrate={new_rate}," + ",".join(tempo_filters) + ",aresample=44100"
+                                    _sp.run([ffmpeg, "-i", str(wav_in), "-filter:a", f,
+                                        str(wav_out), "-y", "-loglevel", "error"], capture_output=True)
+                                if wav_out.exists() and wav_out.stat().st_size > 0:
+                                    _sp.run([ffmpeg, "-i", str(wav_out), "-q:a", "2",
+                                        str(pitched_path), "-y", "-loglevel", "error"], capture_output=True)
+                                    if pitched_path.exists() and pitched_path.stat().st_size > 0:
+                                        out_path = pitched_path
                         return {"path": out_path, "start": seg["start"], "end": seg["end"]}
                     await asyncio.sleep(0.25 * (_attempt + 1))
             return None
@@ -893,6 +1171,46 @@ async def _tts_fpt_ai(
                     return out_path.exists() and out_path.stat().st_size > 0
 
     return False
+
+
+async def _tts_openai(
+    text: str,
+    voice: str,
+    out_path: Path,
+    api_key: str = "",
+    model: str = "tts-1",
+) -> bool:
+    """Generate TTS using OpenAI TTS API."""
+    import aiohttp
+
+    key = (api_key or "").strip() or os.getenv("OPENAI_API_KEY", "").strip()
+    if not key:
+        raise RuntimeError("Missing OpenAI API key (set OPENAI_API_KEY or config)")
+
+    out_path = Path(out_path)
+    if not text or not text.strip():
+        return False
+
+    valid_voices = {"alloy", "echo", "fable", "onyx", "nova", "shimmer"}
+    oai_voice = str(voice or "nova").strip().lower()
+    if oai_voice not in valid_voices:
+        oai_voice = "nova"
+
+    payload = {"model": model or "tts-1", "input": text.strip(), "voice": oai_voice}
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+
+    timeout = aiohttp.ClientTimeout(total=60)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.post(
+            "https://api.openai.com/v1/audio/speech",
+            json=payload,
+            headers=headers,
+        ) as resp:
+            if resp.status != 200:
+                raise RuntimeError(f"OpenAI TTS error {resp.status}: {await resp.text()}")
+            audio_bytes = await resp.read()
+            out_path.write_bytes(audio_bytes)
+            return out_path.exists() and out_path.stat().st_size > 0
 
 
 def _tts_gtts(text: str, lang: str, out_path: Path) -> bool:
@@ -1230,28 +1548,29 @@ def process_video_full(data: dict) -> Generator[str, None, None]:
     blur_height_pct = _clamp_float(_as_float(data.get("blur_height_pct", 0.15), 0.15), 0.08, 0.45)
     blur_lift_pct = _clamp_float(_as_float(data.get("blur_lift_pct", 0.06), 0.06), 0.0, 0.20)
 
-    effective_margin_v = _as_int(data.get("margin_v", 20), 20)
-    if subtitle_pos == "bottom":
-        # Keep subtitle around the center of the (possibly lifted) bottom blur strip.
+    user_margin_v = data.get("margin_v")
+    effective_margin_v = _as_int(user_margin_v, 20) if user_margin_v is not None else 20
+    # Chỉ tự động tính margin khi user không set rõ ràng
+    if subtitle_pos == "bottom" and user_margin_v is None:
         auto_margin = int(720 * (blur_height_pct * 0.5 + (blur_lift_pct if (blur_enabled and blur_zone == "bottom") else 0.0)))
-        effective_margin_v = max(effective_margin_v + 8, auto_margin)
+        effective_margin_v = max(effective_margin_v, auto_margin)
 
     vi_ass_path = None
     final_output_path = None
 
-    yield send(log=f"[Bước 1/4] Phiên âm: {video_path.name}", level="info")
+    yield send(log=f"[Bước 1/5] Phiên âm: {video_path.name}", level="info")
     yield send(overall=5, overall_lbl="Bắt đầu...")
 
     # ── Step 1: Transcribe ────────────────────────────────────────────────────
     # Check video audio first
     has_audio = has_audio_track(video_path, ffmpeg)
     if not has_audio:
-        yield send(log=f"[Bước 1/4] ⚠ Video không có audio track", level="warning")
+        yield send(log=f"[Bước 1/5] ⚠ Video không có audio track", level="warning")
     
     if transcribe_provider == "model":
-        yield send(log=f"[Bước 1/4] Đang phiên âm bằng Whisper local ({model_name})...", level="info")
+        yield send(log=f"[Bước 1/5] Đang phiên âm bằng Whisper local ({model_name})...", level="info")
     else:
-        yield send(log="[Bước 1/4] Đang phiên âm bằng Groq Whisper API...", level="info")
+        yield send(log="[Bước 1/5] Đang phiên âm bằng Groq Whisper API...", level="info")
     yield send(overall=10, overall_lbl="Đang phiên âm...")
 
     ass_path = out_dir / f"{stem}.ass"  # dùng ASS thay SRT
@@ -1260,94 +1579,133 @@ def process_video_full(data: dict) -> Generator[str, None, None]:
     segments = []
     transcribe_failed = False
 
-    try:
-        import yaml
-        cfg_file = Path(__file__).parent.parent / "config.yml"
-        cfg_raw = yaml.safe_load(cfg_file.read_text(encoding="utf-8")) if cfg_file.exists() else {}
-        tr_cfg = cfg_raw.get("transcript", {}) or {}
-        if transcribe_provider == "model":
-            transcriber = FasterWhisperTranscriber(model_name, language, use_vad=True)
-        else:
-            groq_key = (
-                str(data.get("groq_api_key") or "").strip()
-                or os.getenv("GROQ_API_KEY", "").strip()
-                or str(tr_cfg.get("groq_api_key") or "").strip()
-            )
-            groq_model = str(data.get("groq_model") or tr_cfg.get("groq_model") or _GROQ_MODEL).strip() or _GROQ_MODEL
-            groq_max_mb = int(data.get("groq_max_mb") or tr_cfg.get("groq_max_mb") or _GROQ_MAX_MB)
+    # ── Resume: kiểm tra file cache từ lần chạy trước ─────────────────────────
+    vi_ass_path_cached   = out_dir / f"{stem}_vi.ass"
+    burned_path_cached   = out_dir / f"{stem}_subbed.mp4"
+    voice_path_cached    = out_dir / f"{stem}_vi_voice.mp4"
+    af_path_cached       = out_dir / f"{stem}_af.mp4"
 
-            transcriber = GroqWhisperTranscriber(
-                language=language,
-                api_key=groq_key,
-                model=groq_model,
-                max_mb=groq_max_mb,
-            )
-        segments = transcriber.transcribe(video_path, ffmpeg, source_srt_path)
-        if not segments:
-            transcribe_failed = True
-            yield send(log="[Bước 1/4] ⚠ Không phát hiện giọng nói trong video", level="warning")
-            # ─ Fallback: Kiểm tra nếu user muốn TTS + burn phụ đề
-            if not (do_voice or do_burn):
-                yield send(log="[Bước 1/4] ✗ Không có giọng nói và TTS/burn phụ đề cũng bị tắt", level="error")
-                return
-            # ─ Nếu chỉ muốn burn phụ đề mà không TTS, hãy skip transcribe
-            if do_burn and not do_voice:
-                yield send(log="[Bước 1/4] ℹ Sẽ chỉ burn phụ đề, bỏ qua phiên âm", level="info")
-                segments = []  # Empty segments — sẽ skip TTS later
+    # Bước 1: nếu SRT đã có → load lại, skip transcribe
+    if source_srt_path.exists() and source_srt_path.stat().st_size > 0:
+        try:
+            segments = _parse_srt(source_srt_path)
+            if segments:
+                yield send(log=f"[Bước 1/5] ♻ Dùng lại phiên âm cũ ({len(segments)} đoạn): {source_srt_path.name}", level="info")
+                yield send(overall=35, overall_lbl=f"Phiên âm cũ: {len(segments)} đoạn")
+                transcribe_failed = False
+        except Exception:
+            segments = []
+
+    # Load config (cần cho tất cả các bước)
+    import yaml as _yaml
+    _cfg_file = Path(__file__).parent.parent / "config.yml"
+    cfg_raw = _yaml.safe_load(_cfg_file.read_text(encoding="utf-8")) if _cfg_file.exists() else {}
+    tr_cfg = cfg_raw.get("transcript", {}) or {}
+
+    if not segments:
+        try:
+            if transcribe_provider == "model":
+                transcriber = FasterWhisperTranscriber(model_name, language, use_vad=True)
             else:
-                # Tạo empty segments với duration từ video metadata
+                groq_key = (
+                    str(data.get("groq_api_key") or "").strip()
+                    or os.getenv("GROQ_API_KEY", "").strip()
+                    or str(tr_cfg.get("groq_api_key") or "").strip()
+                )
+                groq_model = str(data.get("groq_model") or tr_cfg.get("groq_model") or _GROQ_MODEL).strip() or _GROQ_MODEL
+                groq_max_mb = int(data.get("groq_max_mb") or tr_cfg.get("groq_max_mb") or _GROQ_MAX_MB)
+                transcriber = GroqWhisperTranscriber(
+                    language=language,
+                    api_key=groq_key,
+                    model=groq_model,
+                    max_mb=groq_max_mb,
+                )
+            segments = transcriber.transcribe(video_path, ffmpeg, source_srt_path)
+            if not segments:
+                transcribe_failed = True
+                yield send(log="[Bước 1/5] ⚠ Không phát hiện giọng nói trong video", level="warning")
+                if not (do_voice or do_burn):
+                    yield send(log="[Bước 1/5] ✗ Không có giọng nói và TTS/burn phụ đề cũng bị tắt", level="error")
+                    return
+                if do_burn and not do_voice:
+                    yield send(log="[Bước 1/5] ℹ Sẽ chỉ burn phụ đề, bỏ qua phiên âm", level="info")
+                    segments = []
+                else:
+                    video_duration = get_media_duration_seconds(ffmpeg, video_path)
+                    if video_duration > 0:
+                        segments = [{"start": 0.0, "end": video_duration, "text": "[Giọng nói tự động]"}]
+                        yield send(log=f"[Bước 1/5] ℹ Tạo 1 segment tự động (0s → {video_duration:.1f}s)", level="info")
+                    else:
+                        yield send(log="[Bước 1/5] ✗ Không thể tính được thời lượng video", level="error")
+                        return
+            else:
+                write_ass(segments, ass_path)
+                yield send(log=f"[Bước 1/5] ✓ Phiên âm {len(segments)} đoạn → {ass_path.name}", level="success")
+            yield send(overall=35, overall_lbl=f"Phiên âm xong: {len(segments)} đoạn")
+        except RuntimeError as e:
+            transcribe_failed = True
+            yield send(log=f"[Bước 1/5] ⚠ Phiên âm thất bại: {e}", level="warning")
+            if not (do_voice or do_burn):
+                yield send(log="[Bước 1/5] ✗ Không có giọng nói và TTS/burn phụ đề cũng bị tắt", level="error")
+                return
+            if do_burn and not do_voice:
+                yield send(log="[Bước 1/5] ℹ Sẽ chỉ burn phụ đề", level="info")
+                segments = []
+            else:
                 video_duration = get_media_duration_seconds(ffmpeg, video_path)
                 if video_duration > 0:
                     segments = [{"start": 0.0, "end": video_duration, "text": "[Giọng nói tự động]"}]
-                    yield send(log=f"[Bước 1/4] ℹ Tạo 1 segment tự động (0s → {video_duration:.1f}s)", level="info")
+                    yield send(log=f"[Bước 1/5] ℹ Tạo fallback segment (0s → {video_duration:.1f}s)", level="info")
                 else:
-                    yield send(log="[Bước 1/4] ✗ Không thể tính được thời lượng video", level="error")
+                    yield send(log="[Bước 1/5] ✗ Không thể tính được thời lượng video", level="error")
                     return
-        else:
-            # Convert transcription to ASS
-            write_ass(segments, ass_path)
-            yield send(log=f"[Bước 1/4] ✓ Phiên âm {len(segments)} đoạn → {ass_path.name}", level="success")
-        
-        yield send(overall=35, overall_lbl=f"Phiên âm xong: {len(segments)} đoạn")
-    except RuntimeError as e:
-        transcribe_failed = True
-        yield send(log=f"[Bước 1/4] ⚠ Phiên âm thất bại: {e}", level="warning")
-        # Fallback tương tự như trên
-        if not (do_voice or do_burn):
-            yield send(log="[Bước 1/4] ✗ Không có giọng nói và TTS/burn phụ đề cũng bị tắt", level="error")
-            return
-        if do_burn and not do_voice:
-            yield send(log="[Bước 1/4] ℹ Sẽ chỉ burn phụ đề", level="info")
-            segments = []
-        else:
-            video_duration = get_media_duration_seconds(ffmpeg, video_path)
-            if video_duration > 0:
-                segments = [{"start": 0.0, "end": video_duration, "text": "[Giọng nói tự động]"}]
-                yield send(log=f"[Bước 1/4] ℹ Tạo fallback segment (0s → {video_duration:.1f}s)", level="info")
-            else:
-                yield send(log="[Bước 1/4] ✗ Không thể tính được thời lượng video", level="error")
+        except Exception as e:
+            transcribe_failed = True
+            yield send(log=f"[Bước 1/5] ⚠ Lỗi phiên âm: {e}", level="warning")
+            if not (do_voice or do_burn):
                 return
-    except Exception as e:
-        transcribe_failed = True
-        yield send(log=f"[Bước 1/4] ⚠ Lỗi phiên âm: {e}", level="warning")
-        if not (do_voice or do_burn):
-            return
-        if do_burn and not do_voice:
-            segments = []
-        else:
-            video_duration = get_media_duration_seconds(ffmpeg, video_path)
-            if video_duration > 0:
-                segments = [{"start": 0.0, "end": video_duration, "text": "[Giọng nói tự động]"}]
+            if do_burn and not do_voice:
+                segments = []
             else:
-                return
+                video_duration = get_media_duration_seconds(ffmpeg, video_path)
+                if video_duration > 0:
+                    segments = [{"start": 0.0, "end": video_duration, "text": "[Giọng nói tự động]"}]
+                else:
+                    return
 
     # ── Step 2: Translate ZH → VI ─────────────────────────────────────────────
     translated_texts = []
-    if (do_translate or do_voice) and segments:
+    # Resume: nếu vi.ass đã có → load lại segments và translated_texts từ đó
+    if vi_ass_path_cached.exists() and vi_ass_path_cached.stat().st_size > 0 and segments:
+        try:
+            cached_vi_segs = _parse_srt(vi_ass_path_cached) if vi_ass_path_cached.suffix == ".srt" else []
+            # Parse ASS để lấy text
+            if not cached_vi_segs:
+                raw = vi_ass_path_cached.read_text(encoding="utf-8", errors="replace")
+                cached_vi_segs = []
+                for line in raw.splitlines():
+                    if line.startswith("Dialogue:"):
+                        parts = line.split(",", 9)
+                        if len(parts) >= 10:
+                            t_start = parts[1].strip(); t_end = parts[2].strip()
+                            def _ass_to_sec(t):
+                                h, m, s = t.split(":")
+                                return int(h)*3600 + int(m)*60 + float(s)
+                            cached_vi_segs.append({"start": _ass_to_sec(t_start), "end": _ass_to_sec(t_end), "text": parts[9].replace("\\N", "\n")})
+            if cached_vi_segs:
+                translated_texts = [s["text"] for s in cached_vi_segs]
+                vi_ass_path = vi_ass_path_cached
+                srt_path = vi_ass_path
+                yield send(log=f"[Bước 2/5] ♻ Dùng lại bản dịch cũ ({len(translated_texts)} đoạn): {vi_ass_path_cached.name}", level="info")
+                yield send(overall=55, overall_lbl="Dùng lại bản dịch cũ")
+        except Exception:
+            translated_texts = []
+
+    if not translated_texts and (do_translate or do_voice) and segments:
         n_segs = len(segments)
         batch_sz = 30
         n_batches = (n_segs + batch_sz - 1) // batch_sz
-        yield send(log=f"[Bước 2/4] Dịch {n_segs} đoạn sang tiếng Việt ({n_batches} batch)...", level="info")
+        yield send(log=f"[Bước 2/5] Dịch {n_segs} đoạn sang tiếng Việt ({n_batches} batch)...", level="info")
         yield send(overall=45, overall_lbl=f"Đang dịch {n_segs} đoạn...")
         try:
             from utils.translation import BatchTranslator
@@ -1375,10 +1733,10 @@ def process_video_full(data: dict) -> Generator[str, None, None]:
             texts = [seg.get("text", "").strip() for seg in segments]
             has_ds = bool(trans_cfg.get("deepseek_key"))
             has_groq = bool(trans_cfg.get("groq_key"))
-            yield send(log=f"[Bước 2/4] Provider: {provider} | deepseek={'✓' if has_ds else '✗'} | groq={'✓' if has_groq else '✗'}", level="info")
+            yield send(log=f"[Bước 2/5] Provider: {provider} | deepseek={'✓' if has_ds else '✗'} | groq={'✓' if has_groq else '✗'}", level="info")
             translator = BatchTranslator(trans_cfg)
             translated_texts, used = translator.translate(texts, provider)
-            yield send(log=f"[Bước 2/4] ✓ Dịch xong {len(translated_texts)} đoạn (provider: {used})", level="success")
+            yield send(log=f"[Bước 2/5] ✓ Dịch xong {len(translated_texts)} đoạn (provider: {used})", level="success")
             yield send(overall=55, overall_lbl="Dịch xong")
 
             if translated_texts:
@@ -1394,19 +1752,25 @@ def process_video_full(data: dict) -> Generator[str, None, None]:
                           outline_width=_as_int(data.get("outline_width", 2), 2),
                           margin_v=effective_margin_v,
                           alignment=alignment)
-                yield send(log=f"[Bước 2/4] ✓ ASS tiếng Việt: {vi_ass_path.name}", level="success")
+                yield send(log=f"[Bước 2/5] ✓ ASS tiếng Việt: {vi_ass_path.name}", level="success")
 
                 if do_burn and do_burn_vi:
                     srt_path = vi_ass_path
-                    yield send(log=f"[Bước 2/4] Sẽ burn: {srt_path.name}", level="info")
+                    yield send(log=f"[Bước 2/5] Sẽ burn: {srt_path.name}", level="info")
         except Exception as e:
-            yield send(log=f"[Bước 2/4] ✗ Dịch thất bại: {e}", level="error")
+            yield send(log=f"[Bước 2/5] ✗ Dịch thất bại: {e}", level="error")
             translated_texts = []
 
     # ── Step 3: Burn subtitles ────────────────────────────────────────────────
     burned_path = None
-    if do_burn and srt_path.exists():
-        yield send(log=f"[Bước 3/4] Đang burn phụ đề ASS vào video...", level="info")
+    # Resume: nếu file subbed đã có → dùng lại
+    if do_burn and burned_path_cached.exists() and burned_path_cached.stat().st_size > 0:
+        burned_path = burned_path_cached
+        final_output_path = burned_path
+        yield send(log=f"[Bước 3/5] ♻ Dùng lại video phụ đề cũ: {burned_path.name}", level="info")
+        yield send(overall=80, overall_lbl="Dùng lại video phụ đề cũ")
+    elif do_burn and srt_path.exists():
+        yield send(log=f"[Bước 3/5] Đang burn phụ đề ASS vào video...", level="info")
         yield send(overall=65, overall_lbl="Đang burn phụ đề...")
         burned_path = out_dir / f"{stem}_subbed.mp4"
         ok, err = burn_subtitles(
@@ -1428,28 +1792,33 @@ def process_video_full(data: dict) -> Generator[str, None, None]:
             subtitle_format="ass",  # luôn dùng ASS
         )
         if ok:
-            yield send(log=f"[Bước 3/4] ✓ Video có phụ đề: {burned_path.name}", level="success")
+            yield send(log=f"[Bước 3/5] ✓ Video có phụ đề: {burned_path.name}", level="success")
             yield send(overall=80, overall_lbl="Burn phụ đề xong")
             final_output_path = burned_path
         else:
-            yield send(log=f"[Bước 3/4] ✗ Burn thất bại: {err}", level="error")
+            yield send(log=f"[Bước 3/5] ✗ Burn thất bại: {err}", level="error")
             burned_path = None
     elif do_burn and not srt_path.exists():
-        yield send(log="[Bước 3/4] ⚠ Không có file phụ đề để burn", level="warning")
+        yield send(log="[Bước 3/5] ⚠ Không có file phụ đề để burn", level="warning")
     else:
-        yield send(log="[Bước 3/4] ℹ Bỏ qua burn phụ đề", level="info")
+        yield send(log="[Bước 3/5] ℹ Bỏ qua burn phụ đề", level="info")
 
     # ── Step 4: Voice conversion ──────────────────────────────────────────────
-    if do_voice and translated_texts:
-        yield send(log="[Bước 4/4] Đang tạo giọng tiếng Việt...", level="info")
+    # Resume: nếu file voice đã có → dùng lại
+    if do_voice and voice_path_cached.exists() and voice_path_cached.stat().st_size > 0:
+        final_output_path = voice_path_cached
+        yield send(log=f"[Bước 4/5] ♻ Dùng lại giọng tiếng Việt cũ: {voice_path_cached.name}", level="info")
+        yield send(overall=98, overall_lbl="Dùng lại giọng cũ")
+    elif do_voice and translated_texts:
+        yield send(log="[Bước 4/5] Đang tạo giọng tiếng Việt...", level="info")
         yield send(overall=85, overall_lbl="Đang tạo giọng nói...")
         source_for_voice = burned_path if burned_path else video_path
         voice_path = out_dir / f"{stem}_vi_voice.mp4"
         try:
             with tempfile.TemporaryDirectory(prefix="tts_") as tts_tmpdir:
                 tts = MultiProviderTTS(
-                    voice=data.get("tts_voice", "vi-VN-HoaiMyNeural"),
-                    engine=data.get("tts_engine", "edge-tts"),
+                    voice=data.get("tts_voice", "banmai"),
+                    engine=data.get("tts_engine", "fpt-ai"),
                     fpt_api_key=(
                         str(data.get("fpt_api_key") or "").strip()
                         or str((cfg_raw.get("video_process") or {}).get("fpt_api_key") or "").strip()
@@ -1457,6 +1826,13 @@ def process_video_full(data: dict) -> Generator[str, None, None]:
                         or FPT_TTS_DEFAULT_KEY
                     ),
                     fpt_speed=_as_int(data.get("fpt_speed", 0), 0),
+                    openai_api_key=(
+                        str(data.get("openai_api_key") or "").strip()
+                        or str((cfg_raw.get("video_process") or {}).get("openai_api_key") or "").strip()
+                        or str((cfg_raw.get("translation") or {}).get("openai_key") or "").strip()
+                        or os.getenv("OPENAI_API_KEY", "").strip()
+                    ),
+                    openai_model=str(data.get("openai_tts_model") or "tts-1"),
                 )
                 tts_clips = asyncio.run(
                     tts.generate_all(
@@ -1468,10 +1844,11 @@ def process_video_full(data: dict) -> Generator[str, None, None]:
                         tts_speed=_as_float(data.get("tts_speed", 1.0), 1.0),
                         auto_speed=_as_bool(data.get("auto_speed", True), True),
                         ffmpeg=ffmpeg,
+                        pitch_semitones=_as_float(data.get("pitch_semitones", 0.0), 0.0),
                     )
                 )
                 yield send(
-                    log=f"[Bước 4/4] TTS clips thành công: {len(tts_clips)}/{len(translated_texts)}",
+                    log=f"[Bước 4/5] TTS clips thành công: {len(tts_clips)}/{len(translated_texts)}",
                     level="info",
                 )
                 if tts_clips:
@@ -1484,7 +1861,7 @@ def process_video_full(data: dict) -> Generator[str, None, None]:
                             coverage_ratio = min(100.0, max(0.0, (last_end / src_end) * 100.0))
                     yield send(
                         log=(
-                            f"[Bước 4/4] Độ phủ timeline giọng: "
+                            f"[Bước 4/5] Độ phủ timeline giọng: "
                             f"{_fmt_hms(first_start)} → {_fmt_hms(last_end)} "
                             f"(~{coverage_ratio:.1f}% thời lượng thoại)"
                         ),
@@ -1492,7 +1869,7 @@ def process_video_full(data: dict) -> Generator[str, None, None]:
                     )
                 if len(tts_clips) < max(1, int(len(translated_texts) * 0.2)):
                     yield send(
-                        log="[Bước 4/4] Cảnh báo: quá ít clip TTS, có thể bị giới hạn dịch vụ. Hãy thử lại hoặc giảm tốc độ tạo giọng.",
+                        log="[Bước 4/5] Cảnh báo: quá ít clip TTS, có thể bị giới hạn dịch vụ. Hãy thử lại hoặc giảm tốc độ tạo giọng.",
                         level="warning",
                     )
                 mixer = AudioMixer(ffmpeg)
@@ -1505,20 +1882,60 @@ def process_video_full(data: dict) -> Generator[str, None, None]:
                     tts_volume=_as_float(data.get("tts_volume", 1.8), 1.8),
                 )
             if ok:
-                yield send(log=f"[Bước 4/4] ✓ Giọng tiếng Việt: {voice_path.name}", level="success")
+                yield send(log=f"[Bước 4/5] ✓ Giọng tiếng Việt: {voice_path.name}", level="success")
                 yield send(overall=98, overall_lbl="Tạo giọng xong")
                 final_output_path = voice_path
             else:
-                yield send(log=f"[Bước 4/4] ✗ Tạo giọng thất bại: {err}", level="error")
+                yield send(log=f"[Bước 4/5] ✗ Tạo giọng thất bại: {err}", level="error")
         except Exception as e:
-            yield send(log=f"[Bước 4/4] ✗ Lỗi tạo giọng: {e}", level="error")
+            yield send(log=f"[Bước 4/5] ✗ Lỗi tạo giọng: {e}", level="error")
+
+    # ── Step 5: Anti-Fingerprint ──────────────────────────────────────────────
+    af_cfg = (cfg_raw.get("video_process") or {}).get("anti_fingerprint") or {}
+    if _as_bool(af_cfg.get("enabled", False), False):
+        af_out = out_dir / f"{stem}_af.mp4"
+        # Resume: nếu file af đã có → dùng lại
+        if af_path_cached.exists() and af_path_cached.stat().st_size > 0:
+            final_output_path = af_path_cached
+            yield send(log=f"[Bước 5/5] ♻ Dùng lại anti-fingerprint cũ: {af_path_cached.name}", level="info")
+        else:
+            yield send(log="[Bước 5/5] Đang áp dụng anti-fingerprint...", level="info")
+            ok, err = apply_anti_fingerprint(
+                video_path=final_output_path,
+                output_path=af_out,
+                ffmpeg=ffmpeg,
+                overlay_image=af_cfg.get("overlay_image"),
+                overlay_opacity=_clamp_float(_as_float(af_cfg.get("overlay_opacity", 0.02), 0.02), 0.01, 1.0),
+                logo_image=af_cfg.get("logo_image"),
+                logo_enabled=_as_bool(af_cfg.get("logo_enabled", False), False),
+                logo_position=str(af_cfg.get("logo_position", "bottom-left")),
+                logo_max_width_pct=_clamp_float(_as_float(af_cfg.get("logo_max_width_pct", 0.15), 0.15), 0.01, 1.0),
+                logo_opacity=_clamp_float(_as_float(af_cfg.get("logo_opacity", 1.0), 1.0), 0.01, 1.0),
+                logo_padding=_as_int(af_cfg.get("logo_padding", 10), 10),
+            )
+            if ok:
+                final_output_path = af_out
+                yield send(log=f"[Bước 5/5] ✓ Anti-fingerprint: {af_out.name}", level="success")
+            else:
+                yield send(log=f"[Bước 5/5] ✗ Anti-fingerprint thất bại: {err}", level="error")
 
     if not final_output_path:
         final_output_path = video_path.resolve()
         yield send(log="[Hoàn tất] Không có bước chỉnh sửa nào, dùng lại file gốc", level="info", file_path=str(final_output_path))
 
     if cleanup_outputs and final_output_path and final_output_path.exists():
-        for extra in (source_srt_path, srt_path, ass_path, vi_ass_path, burned_path):
+        # Giữ lại SRT/ASS để resume lần sau, chỉ xóa file trung gian không cần thiết
+        intermediates_to_clean = []
+        # Xóa _subbed nếu đã có _vi_voice hoặc _af (bước sau đã dùng xong)
+        if burned_path and burned_path != final_output_path:
+            if voice_path_cached.exists() or af_path_cached.exists():
+                intermediates_to_clean.append(burned_path)
+        # Xóa _vi_voice nếu đã có _af
+        voice_p = out_dir / f"{stem}_vi_voice.mp4"
+        if voice_p.exists() and voice_p != final_output_path and af_path_cached.exists():
+            intermediates_to_clean.append(voice_p)
+
+        for extra in intermediates_to_clean:
             try:
                 if extra and Path(extra).exists() and Path(extra).resolve() != final_output_path.resolve():
                     Path(extra).unlink()
@@ -1537,3 +1954,128 @@ def process_video_full(data: dict) -> Generator[str, None, None]:
 
     yield send(log="✅ Hoàn tất!", level="success")
     yield send(overall=100, overall_lbl="Hoàn tất")
+
+    # ── Backend auto-upload after processing ─────────────────────────────────
+    upload_cfg = dict((cfg_raw.get("upload") or {}))
+    if upload_cfg.get("auto_upload") and final_output_path and final_output_path.exists():
+        platform = str(upload_cfg.get("platform") or "").lower()
+        title = str(data.get("video_title") or final_output_path.stem)
+        # Clean title same way as frontend
+        import re as _re
+        title = _re.sub(r'_(vi_voice|voice|vi)$', '', title, flags=_re.IGNORECASE)
+        title = _re.sub(r'^\d{4}-\d{2}-\d{2}_', '', title)
+        title = _re.sub(r'_\d{15,}$', '', title)
+        title = title.replace('_', ' ').strip()
+
+        if platform in ("tiktok", "both"):
+            try:
+                from tools.tiktok_uploader import TikTokUploader
+                tiktok_cfg = upload_cfg.get("tiktok") or {}
+                uploader = TikTokUploader()
+                if uploader.authenticate(str(tiktok_cfg.get("client_key") or ""), str(tiktok_cfg.get("client_secret") or "")):
+                    privacy = str(tiktok_cfg.get("privacy_status") or "SELF_ONLY").upper()
+                    privacy_map = {"private": "SELF_ONLY", "public": "PUBLIC_TO_EVERYONE", "friends": "MUTUAL_FOLLOW_FRIENDS"}
+                    privacy = privacy_map.get(privacy.lower(), privacy)
+                    result = uploader.upload_video(str(final_output_path), title=title, privacy_level=privacy)
+                    if result:
+                        yield send(log=f"[Auto-upload] ✓ TikTok: {result.get('publish_id')}", level="success")
+                    else:
+                        yield send(log=f"[Auto-upload] ✗ TikTok: {uploader.last_error}", level="error")
+                else:
+                    yield send(log="[Auto-upload] TikTok chưa đăng nhập, bỏ qua", level="warning")
+            except Exception as e:
+                yield send(log=f"[Auto-upload] TikTok lỗi: {e}", level="error")
+
+        if platform in ("youtube", "both"):
+            try:
+                from tools.youtube_uploader import YouTubeUploader
+                yt_cfg = upload_cfg.get("youtube") or {}
+                uploader = YouTubeUploader()
+                if uploader.credentials or uploader.authenticate():
+                    # Extract hashtags from filename
+                    import re
+                    stem = final_output_path.stem
+                    chinese_parts = re.findall(r'[\u4e00-\u9fff\u3400-\u4dbf][^\u0000-\u007F_]*', stem)
+                    hashtags = []
+                    if chinese_parts:
+                        try:
+                            hashtags = ['#' + part.replace(' ', '').lower() for part in chinese_parts]
+                        except:
+                            hashtags = ['#' + part.replace(' ', '') for part in chinese_parts]
+                    
+                    default_tags = ['douyin', 'tiktok', 'video']
+                    all_tags = default_tags + [h[1:] for h in hashtags]
+                    
+                    result = uploader.upload_video(final_output_path, title=title,
+                        description=title, privacy_status=str(yt_cfg.get("privacy_status") or "private"),
+                        tags=all_tags,
+                        is_short=bool(yt_cfg.get("short", False)))
+                    if result:
+                        yield send(log=f"[Auto-upload] ✓ YouTube: {result.get('url')}", level="success")
+                    else:
+                        yield send(log="[Auto-upload] ✗ YouTube upload thất bại", level="error")
+                else:
+                    yield send(log="[Auto-upload] YouTube chưa đăng nhập, bỏ qua", level="warning")
+            except Exception as e:
+                yield send(log=f"[Auto-upload] YouTube lỗi: {e}", level="error")
+
+
+def preview_subtitles_in_video(
+    video_path: Path,
+    ass_path: Path,
+    output_path: Path,
+    ffmpeg: str,
+    duration: int = 30,  # Preview first 30 seconds
+    font_size: int = 32,
+    font_color: str = "yellow",
+    outline_color: str = "black",
+    outline_width: int = 2,
+    margin_v: int = 20,
+    subtitle_position: str = "bottom"
+) -> tuple[bool, str]:
+    """
+    Create a video preview showing subtitles overlaid (not burned) on the video.
+    This allows you to see subtitle positioning before burning them permanently.
+
+    Args:
+        video_path: Path to input video
+        ass_path: Path to ASS subtitle file
+        output_path: Path to output preview video
+        ffmpeg: Path to ffmpeg executable
+        duration: Duration of preview in seconds
+        font_size, font_color, etc.: Subtitle styling options
+
+    Returns:
+        (success, error_message)
+    """
+    video_path = Path(video_path)
+    ass_path = Path(ass_path)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if not video_path.exists():
+        return False, f"Video file not found: {video_path}"
+
+    if not ass_path.exists():
+        return False, f"ASS file not found: {ass_path}"
+
+    # Escape path for ffmpeg filter
+    ass_esc = str(ass_path).replace("\\", "/")
+    if len(ass_esc) >= 2 and ass_esc[1] == ':':
+        ass_esc = ass_esc[0] + "\\:" + ass_esc[2:]
+
+    # Create preview with subtitles overlaid (not burned)
+    cmd = [
+        ffmpeg, "-i", str(video_path),
+        "-vf", f"ass='{ass_esc}'",
+        "-t", str(duration),  # Limit duration
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",  # Fast encoding
+        "-c:a", "copy",
+        str(output_path), "-y", "-loglevel", "error"
+    ]
+
+    ok, err = run_ffmpeg(cmd)
+
+    if ok and output_path.exists():
+        return True, f"Preview created: {output_path}"
+    return False, err

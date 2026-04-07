@@ -171,6 +171,7 @@ class YouTubeUploader:
         tags: list = None,
         category_id: str = "22",  # 22 = People & Blogs
         privacy_status: str = "private",  # private, unlisted, public
+        is_short: bool = False,
         on_progress: callable = None,
     ) -> Optional[Dict[str, Any]]:
         """
@@ -183,6 +184,7 @@ class YouTubeUploader:
             tags: List of video tags
             category_id: YouTube category ID
             privacy_status: 'private', 'unlisted', or 'public'
+            is_short: Whether to upload as a YouTube Short
             on_progress: Callback function(status, pct) for progress tracking
         
         Returns:
@@ -213,6 +215,9 @@ class YouTubeUploader:
                     'publicStatsViewable': True,
                 },
             }
+            
+            if is_short:
+                body['status']['short'] = True
             
             # Create resumable upload
             request = self.youtube.videos().insert(

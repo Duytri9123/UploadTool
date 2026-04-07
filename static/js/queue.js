@@ -193,6 +193,9 @@ function _buildQueueProcessPayload(videoUrl) {
     tts_voice: document.getElementById('proc-tts-voice')?.value || 'vi-VN-HoaiMyNeural',
     keep_bg_music: queueOpts.keep_bg_music,
     bg_volume: parseFloat(document.getElementById('proc-bg-vol')?.value || '0.15'),
+    tts_speed: parseFloat(document.getElementById('proc-tts-speed')?.value || '1.0'),
+    auto_speed: document.getElementById('proc-auto-speed')?.checked ?? true,
+    pitch_semitones: parseFloat(document.getElementById('proc-tts-pitch')?.value || '0'),
     process_mode: window._procMode || 'ai',
   };
 }
@@ -230,6 +233,11 @@ function _runSingleQueueItem(item, index, total) {
                 _setProcProgress(d.overall, d.overall_lbl || '');
                 setQueueItemProgress(item.url, d.overall, d.overall_lbl || '');
               }
+              // Capture output file path for auto-publish
+              if (d.file_path) {
+                window._publishLastOutputPath = d.file_path;
+                window._ytLastOutputPath = d.file_path;
+              }
             } catch (_) {}
           });
           read();
@@ -257,17 +265,32 @@ async function _runQueueViaProcessApi() {
   clearLog('proc-log');
   _setProcProgress(0, 'Bắt đầu hàng chờ...');
 
+  const concurrency = parseInt(document.getElementById('queue-concurrency')?.value || '2', 10);
   const queueSnapshot = [..._queue];
   const total = queueSnapshot.length;
+  let completed = 0;
 
-  for (let i = 0; i < queueSnapshot.length; i += 1) {
-    const item = queueSnapshot[i];
+  // Semaphore: chạy tối đa `concurrency` video cùng lúc
+  const sem = { count: concurrency, queue: [] };
+  function acquire() {
+    return new Promise(resolve => {
+      if (sem.count > 0) { sem.count--; resolve(); }
+      else { sem.queue.push(resolve); }
+    });
+  }
+  function release() {
+    if (sem.queue.length > 0) { sem.queue.shift()(); }
+    else { sem.count++; }
+  }
+
+  const tasks = queueSnapshot.map((item, i) => async () => {
+    await acquire();
     const index = i + 1;
     _downloadingUrl = item.url;
     markQueueItemState(item.url, 'running');
-    setQueueItemProgress(item.url, 0, 'Đang chờ xử lý');
+    setQueueItemProgress(item.url, 0, 'Đang xử lý');
     const cnt = document.getElementById('queue-count');
-    if (cnt) cnt.textContent = _queue.length + ' (' + index + '/' + total + ')';
+    if (cnt) cnt.textContent = _queue.length + ' (' + (++completed) + '/' + total + ')';
 
     const ok = await _runSingleQueueItem(item, index, total);
 
@@ -276,14 +299,19 @@ async function _runQueueViaProcessApi() {
       setQueueItemProgress(item.url, 100, 'Hoàn tất');
       _queue = _queue.filter(q => q.url !== item.url);
       renderQueue();
-      try {
-        await API.post('/api/queue/remove', { url: item.url });
-      } catch (_) {}
+      try { await API.post('/api/queue/remove', { url: item.url }); } catch (_) {}
+      // Auto-publish if enabled
+      if (document.getElementById('publish-auto-upload')?.checked && window._publishLastOutputPath) {
+        await publishSelectedPlatform();
+      }
     } else {
       markQueueItemState(item.url, 'failed');
       setQueueItemProgress(item.url, 0, 'Lỗi xử lý');
     }
-  }
+    release();
+  });
+
+  await Promise.all(tasks.map(t => t()));
 
   _downloadingUrl = null;
   _dlRunning = false;

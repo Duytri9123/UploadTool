@@ -1032,7 +1032,7 @@ def handle_download(data):
                     "translate_subs": bool(post_process.get("translate_subs", True)),
                     "burn_vi_subs": bool(post_process.get("burn_vi_subs", True)),
                     "voice_convert": bool(post_process.get("voice_convert", True)),
-                    "keep_bg_music": bool(post_process.get("keep_bg_music", False)),
+                    "keep_bg_music": bool(post_process.get("keep_bg_music", True)),
                 })
                 translate_provider = str(post_process.get("translate_provider") or "").strip()
                 if translate_provider:
@@ -1588,6 +1588,85 @@ def auto_fetch_cookie():
     threading.Thread(target=run, daemon=True).start()
     return jsonify({"ok": True})
 
+@app.route("/api/upload-image", methods=["POST"])
+def upload_image():
+    """Upload ảnh cho anti-fingerprint (overlay/logo)"""
+    import uuid
+    if 'file' not in request.files:
+        return jsonify({"ok": False, "error": "No file provided"}), 400
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"ok": False, "error": "No file selected"}), 400
+    
+    # Kiểm tra loại file
+    allowed_ext = {'.png', '.jpg', '.jpeg', '.webp'}
+    fname = file.filename.lower()
+    if not any(fname.endswith(ext) for ext in allowed_ext):
+        return jsonify({"ok": False, "error": "Only image files allowed (PNG, JPG, JPEG, WEBP)"}), 400
+    
+    try:
+        # Tạo thư mục temp_uploads nếu chưa có
+        upload_dir = ROOT / "temp_uploads"
+        upload_dir.mkdir(exist_ok=True)
+        
+        # Lưu file với UUID để tránh trùng lặp
+        ext = Path(file.filename).suffix
+        new_filename = f"anti-fp-{uuid.uuid4().hex}{ext}"
+        upload_path = upload_dir / new_filename
+        file.save(str(upload_path))
+        
+        # Trả về path tương đối để backend có thể tìm
+        rel_path = f"temp_uploads/{new_filename}"
+        return jsonify({"ok": True, "path": rel_path})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/browse-file", methods=["POST"])
+def browse_file():
+    import subprocess, sys, json as _json
+    data = request.get_json(silent=True) or {}
+    file_filter = data.get('filter', 'all')
+
+    if file_filter == 'image':
+        filetypes_arg = "image"
+    else:
+        filetypes_arg = "all"
+
+    script = """
+import tkinter as tk
+from tkinter import filedialog
+import sys, json
+
+ft = sys.argv[1] if len(sys.argv) > 1 else 'all'
+root = tk.Tk()
+root.withdraw()
+root.lift()
+root.attributes('-topmost', True)
+
+if ft == 'image':
+    filetypes = [('Image files', '*.png *.jpg *.jpeg *.webp'), ('All files', '*.*')]
+else:
+    filetypes = [('All files', '*.*')]
+
+path = filedialog.askopenfilename(filetypes=filetypes)
+root.destroy()
+print(json.dumps({'path': path or ''}))
+"""
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", script, filetypes_arg],
+            capture_output=True, text=True, timeout=120
+        )
+        out = result.stdout.strip()
+        data_out = _json.loads(out) if out else {"path": ""}
+        return jsonify(data_out)
+    except Exception as e:
+        return jsonify({"path": "", "error": str(e)})
+
+
 def _preload_whisper_model():
     """Preload faster-whisper model in background so first video processes faster."""
     try:
@@ -1734,6 +1813,7 @@ def youtube_upload():
         description = str(data.get("description") or "").strip()
         tags = data.get("tags") or []
         privacy_status = str(data.get("privacy_status") or "private").strip().lower()
+        is_short = bool(data.get("is_short", False))
     else:
         # Handle FormData
         video_file = request.files.get("video_file")
@@ -1755,6 +1835,7 @@ def youtube_upload():
         except:
             tags = []
         privacy_status = str(request.form.get("privacy_status") or "private").strip().lower()
+        is_short = request.form.get("is_short", "false").lower() in ("true", "1", "yes")
 
     if not title and video_path:
         title = _Path(video_path).stem
@@ -1786,6 +1867,7 @@ def youtube_upload():
                 description=description,
                 tags=tags,
                 privacy_status=privacy_status,
+                is_short=is_short,
                 on_progress=on_progress
             )
             
@@ -1817,102 +1899,6 @@ def youtube_logout():
     if uploader.revoke_auth():
         return jsonify({"ok": True, "message": "Logged out from YouTube"})
     return jsonify({"ok": False, "error": "Failed to logout"}), 500
-
-
-@app.route("/api/tiktok_upload", methods=["POST"])
-def tiktok_upload():
-    """Upload video to TikTok using Content Posting API."""
-    from flask import Response, stream_with_context
-    import json as _j
-    from pathlib import Path as _Path
-
-    data = request.json or {}
-    video_path = str(data.get("video_path") or "").strip()
-    title = str(data.get("title") or "").strip()
-    privacy_level = str(data.get("privacy_level") or "SELF_ONLY").strip().upper()
-
-    if not video_path:
-        return jsonify({"ok": False, "error": "Missing video_path"}), 400
-    if not _Path(video_path).exists():
-        return jsonify({"ok": False, "error": f"Video not found: {video_path}"}), 404
-
-    creds = _get_tiktok_credentials("127.0.0.1", 8080)
-    uploader = _get_tiktok_uploader()
-
-    if not uploader.authenticate(creds["client_key"], creds["client_secret"]):
-        return jsonify({"ok": False, "error": "Not authenticated with TikTok. Please login first."}), 401
-
-    def generate():
-        def send(**kw):
-            return _j.dumps(kw, ensure_ascii=False) + "\n"
-
-        progress_msgs = []
-
-        def on_progress(status):
-            progress_msgs.append(send(**status))
-
-        result = uploader.upload_video(
-            video_path=video_path,
-            title=title or _Path(video_path).stem,
-            privacy_level=privacy_level,
-            on_progress=on_progress,
-        )
-
-        for msg in progress_msgs:
-            yield msg
-
-        if result:
-            yield send(
-                log=f"[TikTok] ✓ Đã gửi lên TikTok (publish_id: {result.get('publish_id', '')}). Video đang được xử lý.",
-                level="success",
-                publish_id=result.get("publish_id", ""),
-            )
-        else:
-            err = str(getattr(uploader, "last_error", "") or "Upload thất bại")
-            yield send(log=f"[TikTok] ✗ {err}", level="error")
-
-    return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
-
-
-@app.route("/terms")
-def terms_of_service():
-    return """<!doctype html>
-<html lang="vi"><head><meta charset="utf-8"><title>Terms of Service</title>
-<style>body{font-family:Arial,sans-serif;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.6;color:#333}</style>
-</head><body>
-<h1>Terms of Service</h1>
-<p><strong>Last updated:</strong> April 2026</p>
-<p>This application is a personal tool for downloading and reposting content. By using this app, you agree to comply with TikTok's Terms of Service and all applicable laws.</p>
-<h2>Usage</h2>
-<p>This app uses TikTok's official API to publish videos on behalf of authenticated users. You are responsible for the content you post.</p>
-<h2>Prohibited Use</h2>
-<p>You may not use this app to post content that violates TikTok's Community Guidelines or any applicable laws.</p>
-<h2>Contact</h2>
-<p>For questions, contact the app owner directly.</p>
-</body></html>"""
-
-
-@app.route("/privacy")
-def privacy_policy():
-    return """<!doctype html>
-<html lang="vi"><head><meta charset="utf-8"><title>Privacy Policy</title>
-<style>body{font-family:Arial,sans-serif;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.6;color:#333}</style>
-</head><body>
-<h1>Privacy Policy</h1>
-<p><strong>Last updated:</strong> April 2026</p>
-<p>This application does not collect or store any personal data beyond what is necessary to authenticate with TikTok's API.</p>
-<h2>Data We Store</h2>
-<ul>
-<li>TikTok OAuth access tokens (stored locally on your device only)</li>
-<li>Downloaded video files (stored locally on your device)</li>
-</ul>
-<h2>Data We Do NOT Share</h2>
-<p>We do not sell, share, or transmit your personal data to any third parties.</p>
-<h2>TikTok API</h2>
-<p>This app uses TikTok's official API. Please refer to <a href="https://www.tiktok.com/legal/privacy-policy">TikTok's Privacy Policy</a> for how TikTok handles your data.</p>
-<h2>Contact</h2>
-<p>For questions, contact the app owner directly.</p>
-</body></html>"""
 
 
 if __name__ == "__main__":

@@ -69,6 +69,7 @@ upload:
     title_template: "{title}"
     description_template: "{title}"
     privacy_status: private
+    short: false
   tiktok:
     title_template: "{title}"
     caption_template: "{title}"
@@ -100,13 +101,13 @@ video_process:
   enabled: true
   model: small
   language: zh
-  burn_subs: false
-  blur_original: false
+  burn_subs: true
+  blur_original: true
   translate: true
-  burn_vi_subs: false
+  burn_vi_subs: true
   voice_convert: true
-  keep_bg_music: false
-  keep_bg: false
+  keep_bg_music: true
+  keep_bg: true
   blur_zone: bottom
   tts_voice: banmai
   tts_engine: fpt-ai

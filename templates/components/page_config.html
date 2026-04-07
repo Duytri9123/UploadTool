@@ -109,7 +109,7 @@
                 </div>
               </div>
               <div id="vp-opts">
-                <div class="grid-2">
+                <div class="grid-3">
                   <div class="field">
                     <label data-i18n="lbl_model">Mo hinh Whisper</label>
                     <select id="vp-model">
@@ -129,6 +129,13 @@
                       <option value="ko" data-i18n="opt_lang_ko">Tieng Han</option>
                     </select>
                   </div>
+                  <div class="field">
+                    <label>Chế độ xử lý</label>
+                    <select id="vp-process-mode">
+                      <option value="ai" selected>AI</option>
+                      <option value="model">Mô hình</option>
+                    </select>
+                  </div>
                 </div>
                 <div class="check-grid mb-12">
                   <label class="check-item"><input type="checkbox" id="vp-burn"><span data-i18n="lbl_burn_subs">Burn phụ đề</span></label>
@@ -138,28 +145,127 @@
                   <label class="check-item"><input type="checkbox" id="vp-keep-bg"><span data-i18n="lbl_keep_bg">Giữ nhạc nền</span></label>
                 </div>
                 <div class="grid-2">
+                  <div class="field" style="display:flex;align-items:end;gap:8px">
+                    <div style="flex:1">
+                      <label data-i18n="lbl_tts_engine">TTS Engine</label>
+                      <select id="vp-tts-engine">
+                        <option value="fpt-ai" selected>FPT AI</option>
+                        <option value="openai-tts">OpenAI TTS</option>
+                        <option value="edge-tts">Edge TTS (Microsoft)</option>
+                        <option value="gtts">gTTS (Google)</option>
+                      </select>
+                    </div>
+                    <div style="flex:1">
+                      <label data-i18n="lbl_tts_voice">Giọng đọc</label>
+                      <select id="vp-tts-voice">
+                        <option value="vi-VN-HoaiMyNeural">Hoai My (Nữ)</option>
+                        <option value="vi-VN-NamMinhNeural">Nam Minh (Nam)</option>
+                      </select>
+                    </div>
+                    <div style="display:flex;flex-direction:column;align-items:end;gap:4px;min-width:180px">
+                      <input type="text" id="vp-tts-test-text" placeholder="Nhập nội dung thử giọng đọc..." style="width:100%">
+                      <button type="button" id="btn-tts-test" class="btn btn-sm" style="margin-top:4px">Thử giọng đọc</button>
+                    </div>
+                  </div>
                   <div class="field">
-                    <label data-i18n="lbl_tts_voice">Giọng đọc</label>
-                    <select id="vp-tts-voice">
-                      <option value="vi-VN-HoaiMyNeural">Hoai My (Nữ)</option>
-                      <option value="vi-VN-NamMinhNeural">Nam Minh (Nam)</option>
-                    </select>
+                    <label data-i18n="lbl_tts_speed">Tốc độ giọng</label>
+                    <div style="display:flex;align-items:center;gap:8px">
+                      <input type="range" id="vp-tts-speed" min="0.5" max="3.0" step="0.1" value="1.0" style="flex:1;accent-color:var(--accent)" oninput="document.getElementById('vp-tts-speed-val').textContent=parseFloat(this.value).toFixed(1)+'x'">
+                      <span id="vp-tts-speed-val" style="min-width:50px">1.0x</span>
+                    </div>
+                  </div>
+                  <div class="field">
+                    <label data-i18n="lbl_auto_speed">Tự động tốc độ</label>
+                    <label class="check-item" style="display:flex;align-items:center;gap:8px">
+                      <input type="checkbox" id="vp-auto-speed" checked>
+                      <span data-i18n="lbl_auto_speed_desc">Tự động điều chỉnh theo đoạn</span>
+                    </label>
+                  </div>
+                </div>
+                <div class="grid-2">
+                  <div class="field">
+                    <label data-i18n="lbl_tts_pitch">Điều chỉnh cao độ</label>
+                    <div style="display:flex;align-items:center;gap:8px">
+                      <input type="range" id="vp-tts-pitch" min="-12" max="12" step="0.1" value="0" style="flex:1;accent-color:var(--accent)" oninput="document.getElementById('vp-tts-pitch-val').textContent=(this.value>0?'+':'')+parseFloat(this.value).toFixed(1)+' st'">
+                      <span id="vp-tts-pitch-val" style="min-width:60px">0.0 st</span>
+                    </div>
                   </div>
                   <div class="field">
                     <label data-i18n="lbl_font_size">Cỡ chữ phụ đề</label>
                     <input type="number" id="vp-font-size" min="10" max="72" value="32">
                   </div>
+                  <div class="field">
+                    <label>Vị trí phụ đề</label>
+                    <select id="vp-subtitle-position">
+                      <option value="bottom" selected>Dưới</option>
+                      <option value="top">Trên</option>
+                    </select>
+                  </div>
+                   <div class="field">
+                     <label>Khoảng cách phụ đề (margin_v)</label>
+                     <input type="number" id="vp-margin-v" min="0" max="200" value="20">
+                   </div>
                   <div class="field" style="display:flex;align-items:center;gap:8px;padding-top:20px">
                     <label class="check-item">
                       <input type="checkbox" id="vp-blur-original" checked>
                       <span data-i18n="lbl_blur_original">Che phụ đề gốc</span>
                     </label>
                   </div>
-                  </div>
                 </div>
                 <div class="alert-info" style="margin-top:8px">
                   <span data-i18n="lbl_vp_note">Can: pip install openai-whisper edge-tts. Video se duoc xu ly ngay sau khi tai xong.</span>
                 </div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-header">
+                <span class="card-title">Anti-Fingerprint</span>
+              </div>
+              <div class="field">
+                <label>Enable Anti-Fingerprint</label>
+                <label class="check-item" style="display:inline-flex;align-items:center;gap:8px">
+                  <input type="checkbox" id="cfg-anti-fingerprint-enabled">
+                  <span>Bật</span>
+                </label>
+              </div>
+              <div class="field">
+                <label>Ảnh overlay</label>
+                <div class="flex-center gap-8">
+                  <input type="text" id="cfg-overlay-image-path" placeholder="Đường dẫn ảnh overlay..." style="flex:1" readonly>
+                  <button class="btn btn-secondary btn-sm" type="button" onclick="document.getElementById('cfg-overlay-image-file')?.click()">Browse</button>
+                  <input type="file" id="cfg-overlay-image-file" accept="image/*" style="display:none">
+                </div>
+              </div>
+              <div class="field">
+                <label>Độ mờ overlay (0.01 – 1.0)</label>
+                <input type="number" id="cfg-overlay-opacity" min="0.01" max="1.0" step="0.01" value="0.02" style="width:100px">
+              </div>
+              <div class="field" style="margin-top:10px">
+                <label class="check-item" style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                  <input type="checkbox" id="cfg-logo-enabled">
+                  <span>Thêm logo thương hiệu</span>
+                </label>
+              </div>
+              <div class="field">
+                <label>Ảnh logo</label>
+                <div class="flex-center gap-8">
+                  <input type="text" id="cfg-logo-image-path" placeholder="Đường dẫn ảnh logo..." style="flex:1" readonly>
+                  <button class="btn btn-secondary btn-sm" type="button" onclick="document.getElementById('cfg-logo-image-file')?.click()">Browse</button>
+                  <input type="file" id="cfg-logo-image-file" accept="image/*" style="display:none">
+                </div>
+              </div>
+              <div class="field">
+                <label>Độ mờ logo (0.01 – 1.0)</label>
+                <input type="number" id="cfg-logo-opacity" min="0.01" max="1.0" step="0.01" value="1.0" style="width:100px">
+              </div>
+              <div class="field">
+                <label>Vị trí logo</label>
+                <select id="cfg-logo-position">
+                  <option value="top-left">Trên trái</option>
+                  <option value="top-right">Trên phải</option>
+                  <option value="bottom-left" selected>Dưới trái</option>
+                  <option value="bottom-right">Dưới phải</option>
+                </select>
               </div>
             </div>
             <div class="btn-group">

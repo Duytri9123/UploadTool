@@ -23,206 +23,83 @@
               </div>
             </div>
 
-            <div class="btn-group mb-12" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-              <button class="btn btn-primary" type="button" id="proc-tab-ai" onclick="setProcessMode('ai')" data-i18n="lbl_process_mode_ai">Xử lý AI</button>
-              <button class="btn btn-secondary" type="button" id="proc-tab-model" onclick="setProcessMode('model')" data-i18n="lbl_process_mode_model">Xử lý mô hình</button>
-            </div>
-
-            <div class="card" id="proc-model-panel">
-              <div class="card-header"><span class="card-title" data-i18n="lbl_model_settings">Mô hình xử lý</span></div>
-              <div class="grid-2">
-                <div class="field">
-                  <label data-i18n="lbl_model">Mo hinh Whisper</label>
-                  <select id="proc-model">
-                    <option value="tiny">tiny (nhanh nhat)</option>
-                    <option value="base" selected>base</option>
-                    <option value="small">small</option>
-                    <option value="medium">medium</option>
-                    <option value="large">large (tot nhat)</option>
-                  </select>
-                </div>
-                <div class="field">
-                  <label data-i18n="lbl_language">Ngon ngu goc</label>
-                  <select id="proc-lang">
-                    <option value="zh" selected>Tieng Trung</option>
-                    <option value="en">Tieng Anh</option>
-                    <option value="ja">Tieng Nhat</option>
-                    <option value="ko">Tieng Han</option>
-                  </select>
-                </div>
-              </div>
-              <div class="grid-2" style="margin-top:10px;">
-                <div class="field">
-                  <label data-i18n="lbl_transcribe_provider">Phiên âm bằng</label>
-                  <select id="proc-transcribe-provider-model">
-                    <option value="model" selected>Whisper model local</option>
-                    <option value="groq">Groq Whisper API</option>
-                  </select>
-                </div>
-                <div class="field">
-                  <label data-i18n="lbl_translate_provider">Tạo phụ đề bằng</label>
-                  <select id="proc-trans-provider-model">
-                    <option value="deepseek" selected>DeepSeek</option>
-                    <option value="groq">Groq</option>
-                    <option value="openai">OpenAI</option>
-                    <option value="huggingface">HuggingFace</option>
-                    <option value="google">Google</option>
-                    <option value="auto">Auto</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            <div id="proc-ai-panel">
-            <div class="card">
-              <div class="card-header"><span class="card-title" data-i18n="lbl_process_mode_ai">Xử lý AI</span></div>
-              <div class="grid-2">
-                <div class="field">
-                  <label data-i18n="lbl_transcribe_provider">Phiên âm bằng</label>
-                  <select id="proc-transcribe-provider-ai">
-                    <option value="groq" selected>Groq Whisper API</option>
-                  </select>
-                </div>
-                <div class="field">
-                  <label data-i18n="lbl_translate_provider">Tạo phụ đề bằng</label>
-                  <select id="proc-trans-provider-ai">
-                    <option value="deepseek" selected>DeepSeek</option>
-                    <option value="groq">Groq</option>
-                    <option value="openai">OpenAI</option>
-                    <option value="huggingface">HuggingFace</option>
-                    <option value="google">Google</option>
-                    <option value="auto">Auto</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-            </div>
-            <!-- Subtitle options -->
             <div class="card">
               <div class="card-header">
-                <span class="card-title" data-i18n="lbl_subtitle_opts">Phụ đề & dịch</span>
-                <div class="card-actions">
-                  <label class="toggle-wrap">
-                    <input type="checkbox" class="toggle-input" id="proc-burn" checked>
-                    <div class="toggle"></div>
-                    <span class="toggle-label text-sm" data-i18n="lbl_burn_subs">Ghi phụ đề lên video</span>
-                  </label>
-                </div>
+                <span class="card-title">Hậu xử lý video sau khi tải</span>
               </div>
-              <div id="proc-burn-opts">
-                <div class="check-grid mb-12" style="grid-template-columns:repeat(2,minmax(0,1fr));">
-                  <label class="check-item">
-                    <input type="checkbox" id="proc-translate-subs" checked>
-                    <span data-i18n="lbl_translate_subs">Tạo bản dịch tiếng Việt</span>
-                  </label>
-                  <label class="check-item">
-                    <input type="checkbox" id="proc-burn-vi" checked>
-                    <span data-i18n="lbl_burn_vi_subs">Ghi phụ đề tiếng Việt</span>
-                  </label>
-                </div>
-                <div class="grid-2">
-                  <div class="field">
-                    <label data-i18n="lbl_font_size">Cỡ chữ phụ đề</label>
-                    <input type="number" id="proc-font-size" min="10" max="72" value="32">
-                  </div>
-                  <div class="field">
-                    <label data-i18n="lbl_font_color">Màu chữ</label>
-                    <select id="proc-font-color">
-                      <option value="white" selected>Trắng</option>
-                      <option value="yellow">Vàng</option>
-                      <option value="cyan">Xanh cyan</option>
-                    </select>
-                  </div>
-                  <div class="field">
-                    <label data-i18n="lbl_margin_v">Khoảng cách đáy (px)</label>
-                    <input type="number" id="proc-margin-v" min="0" max="100" value="20">
-                  </div>
-                  <div class="field">
-                    <label data-i18n="lbl_subtitle_position">Vị trí phụ đề</label>
-                    <select id="proc-sub-pos">
-                      <option value="bottom" selected>Dưới</option>
-                      <option value="top">Trên</option>
-                    </select>
-                  </div>
-                </div>
-                <div class="check-group" style="margin-top:8px">
-                  <label class="check-item">
-                    <input type="checkbox" id="proc-blur-original" checked>
-                    <span data-i18n="lbl_blur_original">Che phụ đề gốc (blur vùng phụ đề tiếng Trung)</span>
-                  </label>
-                </div>
+              <div class="check-grid mb-12" style="grid-template-columns:repeat(2,minmax(0,1fr));">
+                <label class="check-item">
+                  <input type="checkbox" id="proc-burn" checked>
+                  <span>Chèn phụ đề lên video</span>
+                </label>
+                <label class="check-item">
+                  <input type="checkbox" id="proc-translate-subs" checked>
+                  <span>Tạo bản dịch tiếng Việt</span>
+                </label>
+                <label class="check-item">
+                  <input type="checkbox" id="proc-burn-vi" checked>
+                  <span>Burn phụ đề tiếng Việt</span>
+                </label>
+                <label class="check-item">
+                  <input type="checkbox" id="proc-voice" checked>
+                  <span>Đổi giọng tiếng Việt</span>
+                </label>
+                <label class="check-item">
+                  <input type="checkbox" id="proc-keep-bg" checked>
+                  <span>Giữ nhạc nền</span>
+                </label>
+                <label class="check-item">
+                  <input type="checkbox" id="proc-blur-original" checked>
+                  <span>Che phụ đề gốc</span>
+                </label>
               </div>
-            </div>
-
-            <!-- Voice conversion -->
-            <div class="card">
-              <div class="card-header">
-                <span class="card-title" data-i18n="lbl_voice_convert">Đổi giọng tiếng Việt</span>
-                <div class="card-actions">
-                  <label class="toggle-wrap">
-                    <input type="checkbox" class="toggle-input" id="proc-voice" checked>
-                    <div class="toggle"></div>
-                    <span class="toggle-label text-sm" data-i18n="lbl_enable_voice">Bat</span>
-                  </label>
-                </div>
-              </div>
-              <div id="proc-voice-opts" style="display:block">
-                <div class="grid-2">
-                  <div class="field">
-                    <label data-i18n="lbl_tts_engine">TTS Engine</label>
-                    <select id="proc-tts-engine">
-                      <option value="fpt-ai" selected>FPT AI TTS</option>
-                      <option value="edge-tts">Edge TTS (Microsoft)</option>
-                      <option value="gtts">gTTS (Google)</option>
-                    </select>
-                  </div>
-                  <div class="field">
-                    <label data-i18n="lbl_tts_voice">Giong doc</label>
-                    <select id="proc-tts-voice">
-                      <option value="banmai" selected>Ban Mai (FPT)</option>
-                      <option value="thuminh">Thu Minh (FPT)</option>
-                      <option value="myan">My An (FPT)</option>
-                      <option value="leminh">Le Minh (FPT)</option>
-                    </select>
-                  </div>
-                </div>
-                <div class="check-grid mb-12">
-                  <label class="check-item">
-                    <input type="checkbox" id="proc-keep-bg">
-                    <span data-i18n="lbl_keep_bg">Giu nhac nen goc</span>
-                  </label>
+              <div class="grid-2" style="gap:12px; margin-top:8px;">
+                <div class="field">
+                  <label>Cỡ chữ phụ đề</label>
+                  <input type="number" id="proc-font-size" min="12" max="72" step="1" value="32" style="width:100%">
                 </div>
                 <div class="field">
-                  <label data-i18n="lbl_bg_volume">Am luong nhac nen (0.0 - 1.0)</label>
-                  <input type="range" id="proc-bg-vol" min="0" max="1" step="0.1" value="0.1"
-                    oninput="document.getElementById('proc-bg-vol-val').textContent=this.value"
-                    style="width:100%;accent-color:var(--accent)">
-                  <span class="text-xs text-muted" id="proc-bg-vol-val">0.1</span>
+                  <label>Vị trí phụ đề</label>
+                  <select id="proc-sub-pos" style="width:100%;">
+                    <option value="bottom" selected>Dưới</option>
+                    <option value="top">Trên</option>
+                  </select>
                 </div>
-                <div class="field">
-                  <label>Tốc độ đọc
-                    <span style="color:var(--dim);font-size:11px"> — Auto = tự khớp theo segment</span>
-                  </label>
-                  <div style="display:flex;align-items:center;gap:10px">
-                    <input type="range" id="proc-tts-speed" min="0.5" max="3.0" step="0.1" value="1.0"
-                      oninput="document.getElementById('proc-tts-speed-val').textContent=parseFloat(this.value).toFixed(1)+'x';document.getElementById('proc-auto-speed').checked=false"
-                      style="flex:1;accent-color:var(--accent)">
-                    <span class="text-xs" id="proc-tts-speed-val" style="min-width:32px">1.0x</span>
+              </div>
+              <div class="field" style="margin-top:8px">
+                <label>Khoảng cách đáy (margin_v)</label>
+                <input type="number" id="proc-margin-v" min="0" max="100" step="1" value="20" style="width:100px">
+              </div>
+              <div style="display:flex;gap:12px;margin-top:12px;align-items:end;flex-wrap:wrap">
+                <div class="field" style="flex:1;min-width:120px">
+                  <label>TTS Engine</label>
+                  <select id="proc-tts-engine" onchange="_syncVoiceOptions('proc-tts-engine','proc-tts-voice')">
+                    <option value="fpt-ai" selected>FPT AI</option>
+                    <option value="openai-tts">OpenAI TTS</option>
+                    <option value="edge-tts">Edge TTS (Microsoft)</option>
+                    <option value="gtts">gTTS (Google)</option>
+                  </select>
+                </div>
+                <div class="field" style="flex:1;min-width:120px">
+                  <label>Giọng đọc</label>
+                  <select id="proc-tts-voice"></select>
+                </div>
+                <div class="field" style="flex:2;min-width:180px">
+                  <label>Thử giọng</label>
+                  <div style="display:flex;gap:6px">
+                    <input type="text" id="proc-preview-text" placeholder="Nhập nội dung thử..." style="flex:1">
+                    <button type="button" id="btn-proc-preview" class="btn btn-sm btn-secondary" onclick="previewProcVoice()">▶ Nghe thử</button>
                   </div>
-                  <label class="check-item" style="margin-top:6px;display:flex;align-items:center;gap:6px;cursor:pointer">
-                    <input type="checkbox" id="proc-auto-speed" checked
-                      onchange="document.getElementById('proc-tts-speed').value=1.0;document.getElementById('proc-tts-speed-val').textContent='1.0x'">
-                    <span style="font-size:12px">Tự động khớp tốc độ theo độ dài segment</span>
-                  </label>
+                  <audio id="proc-preview-audio" controls style="display:none;width:100%;margin-top:6px"></audio>
                 </div>
-                <div class="alert-info" style="padding:8px 12px;border-radius:6px;background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.3);color:#60a5fa;font-size:12px;margin-top:8px">
-                  <span data-i18n="lbl_voice_note">Can: pip install edge-tts (hoac gtts). Moi doan se duoc doc bang giong Viet tai dung thoi diem.</span>
-                </div>
+              </div>
+              <div class="alert-info" style="margin-top:8px">
+                <span style="font-size:13px">Các tùy chọn chi tiết hơn được cấu hình trong trang Cấu hình.</span>
               </div>
             </div>
 
             <div class="btn-group">
-              <button class="btn btn-primary" id="btn-proc" onclick="startProcessVideo()" data-i18n="btn_process_video">Xu ly Video</button>
+              <button class="btn btn-primary" id="btn-proc" onclick="startProcessVideo()" data-i18n="btn_process_video">Xử lý Video</button>
             </div>
           </div>
 
@@ -349,7 +226,15 @@
               <div id="queue-list" style="max-height:280px;overflow-y:auto">
                 <div class="empty-state" data-i18n="lbl_queue_empty">Hàng chờ trống</div>
               </div>
-              <button class="btn btn-primary" id="btn-dl" onclick="startQueueDownload()" style="width:100%;justify-content:center;margin-top:12px" data-i18n="btn_start_dl">
+              <div style="display:flex;align-items:center;gap:10px;margin-top:10px">
+                <label style="font-size:12px;color:var(--dim);white-space:nowrap">Song song:</label>
+                <input type="range" id="queue-concurrency" min="1" max="4" step="1" value="2"
+                  oninput="document.getElementById('queue-concurrency-val').textContent=this.value"
+                  style="flex:1;accent-color:var(--accent)">
+                <span id="queue-concurrency-val" style="font-size:12px;min-width:16px">2</span>
+                <span style="font-size:11px;color:var(--dim)">(khuyến nghị: 2)</span>
+              </div>
+              <button class="btn btn-primary" id="btn-dl" onclick="startQueueDownload()" style="width:100%;justify-content:center;margin-top:10px" data-i18n="btn_start_dl">
                 Chạy hàng chờ
               </button>
             </div>

@@ -4,14 +4,22 @@ window._trSelectedFile = null;
 
 const TTS_VOICE_PRESETS = {
   'fpt-ai': [
-    { value: 'banmai', label: 'Ban Mai (FPT)' },
-    { value: 'thuminh', label: 'Thu Minh (FPT)' },
-    { value: 'myan', label: 'My An (FPT)' },
-    { value: 'leminh', label: 'Le Minh (FPT)' },
+    { value: 'banmai', label: 'Ban Mai — Nữ miền Bắc (FPT)' },
+    { value: 'thuminh', label: 'Thu Minh — Nữ miền Nam (FPT)' },
+    { value: 'myan', label: 'Mỹ An — Nữ miền Trung (FPT)' },
+    { value: 'leminh', label: 'Lê Minh — Nam miền Bắc (FPT)' },
+  ],
+  'openai-tts': [
+    { value: 'alloy', label: 'Alloy — Trung tính (OpenAI)' },
+    { value: 'echo', label: 'Echo — Nam (OpenAI)' },
+    { value: 'fable', label: 'Fable — Nam (OpenAI)' },
+    { value: 'onyx', label: 'Onyx — Nam trầm (OpenAI)' },
+    { value: 'nova', label: 'Nova — Nữ (OpenAI)' },
+    { value: 'shimmer', label: 'Shimmer — Nữ nhẹ (OpenAI)' },
   ],
   'edge-tts': [
-    { value: 'vi-VN-HoaiMyNeural', label: 'Hoai My (Edge)' },
-    { value: 'vi-VN-NamMinhNeural', label: 'Nam Minh (Edge)' },
+    { value: 'vi-VN-HoaiMyNeural', label: 'Hoài My — Nữ (Edge)' },
+    { value: 'vi-VN-NamMinhNeural', label: 'Nam Minh — Nam (Edge)' },
   ],
   gtts: [
     { value: 'vi', label: 'Vietnamese (gTTS)' },
@@ -20,6 +28,7 @@ const TTS_VOICE_PRESETS = {
 
 const TTS_DEFAULT_VOICE = {
   'fpt-ai': 'banmai',
+  'openai-tts': 'nova',
   'edge-tts': 'vi-VN-HoaiMyNeural',
   gtts: 'vi',
 };
@@ -118,27 +127,17 @@ function startProcessVideo() {
     video_path:       videoPath,
     video_url:        videoUrl || '',
     out_dir:          document.getElementById('proc-out')?.value?.trim() || '',
-    model:            document.getElementById('proc-model')?.value || 'base',
-    language:         document.getElementById('proc-lang')?.value || 'zh',
     burn_subs:        document.getElementById('proc-burn')?.checked ?? true,
     blur_original:    document.getElementById('proc-blur-original')?.checked ?? true,
     translate_subs:   document.getElementById('proc-translate-subs')?.checked ?? true,
     burn_vi_subs:     document.getElementById('proc-burn-vi')?.checked ?? true,
-    subtitle_format:  'ass',
-    font_size:        parseInt(document.getElementById('proc-font-size')?.value || '32'),
-    font_color:       document.getElementById('proc-font-color')?.value || 'white',
-    margin_v:         parseInt(document.getElementById('proc-margin-v')?.value || '20'),
-    subtitle_position: document.getElementById('proc-sub-pos')?.value || 'bottom',
-    transcribe_provider: _getProcessProvider('transcribe'),
-    translate_provider: _getProcessProvider('translate'),
     voice_convert:    document.getElementById('proc-voice')?.checked ?? false,
-    tts_engine:       document.getElementById('proc-tts-engine')?.value || 'edge-tts',
-    tts_voice:        document.getElementById('proc-tts-voice')?.value || 'vi-VN-HoaiMyNeural',
     keep_bg_music:    document.getElementById('proc-keep-bg')?.checked ?? false,
-    bg_volume:        parseFloat(document.getElementById('proc-bg-vol')?.value || '0.15'),
-    tts_speed:        parseFloat(document.getElementById('proc-tts-speed')?.value || '1.0'),
-    auto_speed:       document.getElementById('proc-auto-speed')?.checked ?? true,
-    process_mode:     window._procMode || 'ai',
+    font_size:        parseInt(document.getElementById('proc-font-size')?.value || '32', 10),
+    subtitle_position: document.getElementById('proc-sub-pos')?.value || 'bottom',
+    margin_v:         parseInt(document.getElementById('proc-margin-v')?.value || '20', 10),
+    tts_engine:       document.getElementById('proc-tts-engine')?.value || 'fpt-ai',
+    tts_voice:        document.getElementById('proc-tts-voice')?.value || 'banmai',
   };
 
   const doRequest = (body, isFormData) => fetch('/api/process_video', {
@@ -152,13 +151,9 @@ function startProcessVideo() {
       reader.read().then(({ done, value }) => {
         if (done) {
           if (btn) { btn.disabled = false; btn.textContent = 'Xử lý Video'; }
-          // Auto-publish to the selected platform if enabled
+          // Auto-publish after processing - no confirm
           if (window._publishLastOutputPath && document.getElementById('publish-auto-upload')?.checked) {
-            setTimeout(() => {
-              if (confirm('Bắt đầu đăng video lên nền tảng đã chọn?')) {
-                publishSelectedPlatform();
-              }
-            }, 1000);
+            publishSelectedPlatform();
           }
           return;
         }
@@ -424,6 +419,39 @@ async function previewTranscribeVoice() {
   }
 }
 
+async function previewProcVoice() {
+  const text = document.getElementById('proc-preview-text')?.value?.trim()
+    || 'Xin chào, đây là giọng đọc tiếng Việt.';
+  const btn = document.getElementById('btn-proc-preview');
+  if (btn) { btn.disabled = true; btn.textContent = 'Đang tạo...'; }
+  try {
+    const res = await fetch('/api/tts_preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text,
+        tts_engine: document.getElementById('proc-tts-engine')?.value || 'edge-tts',
+        tts_voice:  document.getElementById('proc-tts-voice')?.value || 'vi-VN-HoaiMyNeural',
+        pitch_semitones: parseFloat(document.getElementById('proc-tts-pitch')?.value || '0'),
+      }),
+    });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error || 'Lỗi'); }
+    const blob = await res.blob();
+    const audio = document.getElementById('proc-preview-audio');
+    if (audio) {
+      if (audio._objUrl) URL.revokeObjectURL(audio._objUrl);
+      audio._objUrl = URL.createObjectURL(blob);
+      audio.src = audio._objUrl;
+      audio.style.display = 'block';
+      audio.play().catch(() => {});
+    }
+  } catch (e) {
+    toast('Lỗi nghe thử: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '▶ Nghe thử'; }
+  }
+}
+
 /* ── Multi-file publish queue ────────────────────────────────────────────── */
 window._procFileQueue = []; // [{file, name, path}]
 
@@ -517,6 +545,11 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   _syncVoiceOptions('proc-tts-engine', 'proc-tts-voice');
 
+  document.getElementById('vp-tts-engine')?.addEventListener('change', function() {
+    _syncVoiceOptions('vp-tts-engine', 'vp-tts-voice');
+  });
+  _syncVoiceOptions('vp-tts-engine', 'vp-tts-voice');
+
   document.getElementById('tr-import-file')?.addEventListener('change', function() {
     const file = this.files && this.files[0] ? this.files[0] : null;
     window._trSelectedFile = file;
@@ -574,6 +607,52 @@ document.addEventListener('DOMContentLoaded', () => {
     if (status) status.textContent = this.checked ? 'Tự động bật' : 'Tự động tắt';
   });
   switchPublishPlatform(localStorage.getItem('publish_platform') || 'youtube');
+
+  // ── Anti-Fingerprint handlers ──────────────────────────────────────────
+  const _uploadAntiFingerprintFile = async (file, pathId, previewId) => {
+    if (!file) return;
+    const pathEl = document.getElementById(pathId);
+    const previewEl = document.getElementById(previewId);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch('/api/upload-image', {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        alert('Upload failed: ' + (data.error || 'Unknown error'));
+        return;
+      }
+      if (pathEl) pathEl.value = data.path;
+      if (previewEl) previewEl.textContent = file.name;
+      await _saveAntiFingerprintConfig();
+    } catch (err) {
+      console.error('anti-fingerprint upload error:', err);
+      alert('Upload error: ' + (err.message || err));
+    }
+  };
+
+  document.getElementById('overlay-image-file')?.addEventListener('change', async (e) => {
+    await _uploadAntiFingerprintFile(e.target.files?.[0], 'overlay-image-path', 'overlay-image-preview');
+  });
+
+  document.getElementById('logo-image-file')?.addEventListener('change', async (e) => {
+    await _uploadAntiFingerprintFile(e.target.files?.[0], 'logo-image-path', 'logo-image-preview');
+  });
+
+  document.getElementById('cfg-overlay-image-file')?.addEventListener('change', async (e) => {
+    await _uploadAntiFingerprintFile(e.target.files?.[0], 'cfg-overlay-image-path', 'cfg-overlay-image-path');
+  });
+
+  document.getElementById('cfg-logo-image-file')?.addEventListener('change', async (e) => {
+    await _uploadAntiFingerprintFile(e.target.files?.[0], 'cfg-logo-image-path', 'cfg-logo-image-path');
+  });
+
+  ['anti-fingerprint-enabled', 'overlay-opacity', 'logo-enabled', 'logo-position'].forEach(id => {
+    document.getElementById(id)?.addEventListener('change', () => _saveAntiFingerprintConfig());
+  });
 });
 
 /* ── Publish Upload ─────────────────────────────────────────────────────── */
@@ -1011,6 +1090,11 @@ async function uploadToYouTube(videoInput) {
     return;
   }
 
+  // Build hashtags from filename
+  const { hashtags } = await _buildPublishTitleAndTags('youtube', videoPath);
+  const defaultTags = ['douyin', 'tiktok', 'video'];
+  const allTags = [...new Set([...defaultTags, ...hashtags.map(h => h.slice(1))])]; // remove #
+
   const logBox = document.getElementById('publish-log');
   if (logBox) {
     logBox.innerHTML = '';
@@ -1024,7 +1108,7 @@ async function uploadToYouTube(videoInput) {
     const payload = {
       title: title,
       description: _getPublishDescription('youtube'),
-      tags: ['douyin', 'tiktok', 'video'],
+      tags: allTags,
       privacy_status: _getPublishPrivacy('youtube'),
     };
 
@@ -1220,5 +1304,41 @@ async function publishSelectedPlatform() {
     await publishQueueToTarget(platform);
   } else {
     await publishBothOrSingle(platform);
+  }
+}
+
+/* ── Anti-Fingerprint config helpers ────────────────────────────────────── */
+function getAntiFingerprintConfig() {
+  const getInput = (procId, cfgId) => {
+    const procEl = document.getElementById(procId);
+    if (procEl) return procEl;
+    return document.getElementById(cfgId);
+  };
+
+  const enabledEl = getInput('anti-fingerprint-enabled', 'cfg-anti-fingerprint-enabled');
+  const overlayEl = getInput('overlay-image-path', 'cfg-overlay-image-path');
+  const opacityEl = getInput('overlay-opacity', 'cfg-overlay-opacity');
+  const logoEnabledEl = getInput('logo-enabled', 'cfg-logo-enabled');
+  const logoEl = getInput('logo-image-path', 'cfg-logo-image-path');
+  const logoPosEl = getInput('logo-position', 'cfg-logo-position');
+
+  return {
+    anti_fingerprint: {
+      enabled: enabledEl?.checked ?? false,
+      overlay_image: overlayEl?.value?.trim() || '',
+      overlay_opacity: parseFloat(opacityEl?.value || '0.02'),
+      logo_enabled: logoEnabledEl?.checked ?? false,
+      logo_image: logoEl?.value?.trim() || '',
+      logo_position: logoPosEl?.value || 'bottom-left',
+    },
+  };
+}
+
+async function _saveAntiFingerprintConfig() {
+  try {
+    const af = getAntiFingerprintConfig();
+    await API.post('/api/config', { video_process: af });
+  } catch (e) {
+    console.warn('save anti-fingerprint config error:', e);
   }
 }

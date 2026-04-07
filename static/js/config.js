@@ -1,3 +1,35 @@
+
+// TTS thử giọng đọc
+document.addEventListener('DOMContentLoaded', () => {
+  const btn = document.getElementById('btn-tts-test');
+  if (!btn) return;
+  btn.onclick = async () => {
+    btn.disabled = true;
+    btn.textContent = 'Đang thử...';
+    try {
+      const engine = document.getElementById('vp-tts-engine').value;
+      const voice = document.getElementById('vp-tts-voice').value;
+      const text = 'Xin chào, đây là giọng đọc mẫu.';
+      const res = await fetch('/api/tts_test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ engine, voice, text })
+      });
+      if (res.ok) {
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audio.play();
+      } else {
+        alert('Không thử được giọng đọc!');
+      }
+    } catch (e) {
+      alert('Lỗi thử giọng đọc!');
+    }
+    btn.disabled = false;
+    btn.textContent = 'Thử giọng đọc';
+  };
+});
 /* ── Config page ─────────────────────────────────────────────────────────── */
 async function loadConfig() {
   const cfg = await API.get('/api/config');
@@ -59,14 +91,39 @@ async function loadConfig() {
   set('vp-model', cfg.video_process?.model || 'base');
   set('vp-lang', cfg.video_process?.language || 'zh');
   setChk('vp-burn', cfg.video_process?.burn_subs !== false);
-  setChk('vp-blur', cfg.video_process?.blur_original === true);
+  setChk('vp-blur-original', cfg.video_process?.blur_original === true);
   setChk('vp-translate', cfg.video_process?.translate !== false);
   setChk('vp-burn-vi', cfg.video_process?.burn_vi_subs !== false);
   setChk('vp-voice', cfg.video_process?.voice_convert !== false);
   setChk('vp-keep-bg', cfg.video_process?.keep_bg_music === true || cfg.video_process?.keep_bg === true);
+  set('vp-process-mode', cfg.video_process?.process_mode || 'ai');
   set('vp-blur-zone', cfg.video_process?.blur_zone || 'bottom');
-  set('vp-tts-voice', cfg.video_process?.tts_voice || 'vi-VN-HoaiMyNeural');
+  set('vp-tts-engine', cfg.video_process?.tts_engine || 'fpt-ai');
+  _syncVoiceOptions('vp-tts-engine', 'vp-tts-voice');
+  set('vp-tts-voice', cfg.video_process?.tts_voice || 'banmai');
+  // Sync proc page dropdowns too
+  set('proc-tts-engine', cfg.video_process?.tts_engine || 'fpt-ai');
+  _syncVoiceOptions('proc-tts-engine', 'proc-tts-voice');
+  set('proc-tts-voice', cfg.video_process?.tts_voice || 'banmai');
+  set('vp-tts-speed', cfg.video_process?.tts_speed ?? 1.0);
+  const speedVal = parseFloat(document.getElementById('vp-tts-speed')?.value || '1.0');
+  if (document.getElementById('vp-tts-speed-val')) document.getElementById('vp-tts-speed-val').textContent = speedVal.toFixed(1) + 'x';
+  setChk('vp-auto-speed', cfg.video_process?.auto_speed !== false);
+  set('vp-tts-pitch', cfg.video_process?.pitch_semitones ?? 0.0);
+  const pitchVal = parseFloat(document.getElementById('vp-tts-pitch')?.value || '0');
+  if (document.getElementById('vp-tts-pitch-val')) document.getElementById('vp-tts-pitch-val').textContent = (pitchVal > 0 ? '+' : '') + pitchVal.toFixed(1) + ' st';
   set('vp-font-size', cfg.video_process?.font_size ?? 22);
+  set('vp-subtitle-position', cfg.video_process?.subtitle_position || 'bottom');
+  set('vp-margin-v', cfg.video_process?.margin_v ?? 20);
+
+  const af = cfg.video_process?.anti_fingerprint || {};
+  setChk('cfg-anti-fingerprint-enabled', af.enabled !== false);
+  set('cfg-overlay-image-path', af.overlay_image || '');
+  set('cfg-overlay-opacity', af.overlay_opacity ?? 0.02);
+  setChk('cfg-logo-enabled', af.logo_enabled === true);
+  set('cfg-logo-image-path', af.logo_image || '');
+  set('cfg-logo-position', af.logo_position || 'bottom-left');
+  set('cfg-logo-opacity', af.logo_opacity ?? 1.0);
 }
 
 async function saveConfig() {
@@ -123,17 +180,33 @@ async function saveConfig() {
       enabled: getChk('vp-enabled'),
       model: get('vp-model'),
       language: get('vp-lang'),
+      process_mode: get('vp-process-mode') || 'ai',
       burn_subs: getChk('vp-burn'),
-      blur_original: getChk('vp-blur'),
+      blur_original: getChk('vp-blur-original'),
       translate: getChk('vp-translate'),
       burn_vi_subs: getChk('vp-burn-vi'),
       voice_convert: getChk('vp-voice'),
       keep_bg_music: getChk('vp-keep-bg'),
       keep_bg: getChk('vp-keep-bg'),
       blur_zone: get('vp-blur-zone'),
+      tts_engine: get('vp-tts-engine'),
       tts_voice: get('vp-tts-voice'),
+      tts_speed: parseFloat(get('vp-tts-speed')) || 1.0,
+      auto_speed: getChk('vp-auto-speed'),
+      pitch_semitones: parseFloat(get('vp-tts-pitch')) || 0.0,
       font_size: parseInt(get('vp-font-size')) || 22,
+      subtitle_position: get('vp-subtitle-position') || 'bottom',
+      margin_v: parseInt(get('vp-margin-v')) || 20,
       subtitle_format: 'ass',
+      anti_fingerprint: {
+        enabled: getChk('cfg-anti-fingerprint-enabled'),
+        overlay_image: get('cfg-overlay-image-path'),
+        overlay_opacity: parseFloat(get('cfg-overlay-opacity') || '0.02'),
+        logo_enabled: getChk('cfg-logo-enabled'),
+        logo_image: get('cfg-logo-image-path'),
+        logo_position: get('cfg-logo-position') || 'bottom-left',
+        logo_opacity: parseFloat(get('cfg-logo-opacity') || '1.0'),
+      },
     }
   };
 
