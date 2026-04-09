@@ -4,10 +4,12 @@ window._trSelectedFile = null;
 
 const TTS_VOICE_PRESETS = {
   'fpt-ai': [
-    { value: 'banmai', label: 'Ban Mai — Nữ miền Bắc (FPT)' },
-    { value: 'thuminh', label: 'Thu Minh — Nữ miền Nam (FPT)' },
-    { value: 'myan', label: 'Mỹ An — Nữ miền Trung (FPT)' },
-    { value: 'leminh', label: 'Lê Minh — Nam miền Bắc (FPT)' },
+    { value: 'banmai', label: 'Ban Mai — Nữ miền Bắc (Dễ nghe)' },
+    { value: 'thuminh', label: 'Thu Minh — Nữ miền Nam (Truyền cảm)' },
+    { value: 'myan', label: 'Mỹ An — Nữ miền Trung' },
+    { value: 'leminh', label: 'Lê Minh — Nam miền Bắc' },
+    { value: 'minhquang', label: 'Minh Quang — Nam miền Nam' },
+    { value: 'vungoc', label: 'Vũ Ngọc — Nữ miền Nam (Vàng)' },
   ],
   'openai-tts': [
     { value: 'alloy', label: 'Alloy — Trung tính (OpenAI)' },
@@ -138,6 +140,8 @@ function startProcessVideo() {
     margin_v:         parseInt(document.getElementById('proc-margin-v')?.value || '20', 10),
     tts_engine:       document.getElementById('proc-tts-engine')?.value || 'fpt-ai',
     tts_voice:        document.getElementById('proc-tts-voice')?.value || 'banmai',
+    tts_speed:        parseFloat(document.getElementById('proc-tts-speed')?.value || '1.0'),
+    pitch_semitones:  parseFloat(document.getElementById('proc-tts-pitch')?.value || '0.0'),
   };
 
   const doRequest = (body, isFormData) => fetch('/api/process_video', {
@@ -432,6 +436,7 @@ async function previewProcVoice() {
         text,
         tts_engine: document.getElementById('proc-tts-engine')?.value || 'edge-tts',
         tts_voice:  document.getElementById('proc-tts-voice')?.value || 'vi-VN-HoaiMyNeural',
+        tts_speed:  parseFloat(document.getElementById('proc-tts-speed')?.value || '1.0'),
         pitch_semitones: parseFloat(document.getElementById('proc-tts-pitch')?.value || '0'),
       }),
     });
@@ -1330,6 +1335,16 @@ function getAntiFingerprintConfig() {
       logo_enabled: logoEnabledEl?.checked ?? false,
       logo_image: logoEl?.value?.trim() || '',
       logo_position: logoPosEl?.value || 'bottom-left',
+      brightness: parseFloat(document.getElementById('cfg-brightness')?.value || '0.02'),
+      contrast: parseFloat(document.getElementById('cfg-contrast')?.value || '1.03'),
+      saturation: parseFloat(document.getElementById('cfg-saturation')?.value || '1.05'),
+      sharpness: parseFloat(document.getElementById('cfg-sharpness')?.value || '0.5'),
+      scale_w: parseInt(document.getElementById('cfg-scale-w')?.value || '0', 10),
+      scale_h: parseInt(document.getElementById('cfg-scale-h')?.value || '0', 10),
+      crop_pct: parseFloat(document.getElementById('cfg-crop-pct')?.value || '0.03'),
+      flip_h: document.getElementById('cfg-flip-h')?.checked ?? false,
+      vignette: document.getElementById('cfg-vignette')?.checked ?? true,
+      speed: parseFloat(document.getElementById('cfg-speed')?.value || '1.0'),
     },
   };
 }
@@ -1340,5 +1355,48 @@ async function _saveAntiFingerprintConfig() {
     await API.post('/api/config', { video_process: af });
   } catch (e) {
     console.warn('save anti-fingerprint config error:', e);
+  }
+}
+
+
+/* ── Vertical Video ──────────────────────────────────────────────────────── */
+async function makeVerticalVideo() {
+  const videoPath = document.getElementById('proc-video')?.value?.trim();
+  if (!videoPath) { alert('Vui lòng chọn file video trước'); return; }
+
+  const btn = event?.currentTarget;
+  if (btn) { btn.disabled = true; btn.textContent = 'Đang tạo...'; }
+
+  const logBox = document.getElementById('vert-log');
+  if (logBox) { logBox.style.display = 'block'; logBox.innerHTML = ''; }
+
+  const sizeVal = document.getElementById('vert-size')?.value || '1080x1920';
+  const [tw, th] = sizeVal.split('x').map(Number);
+
+  try {
+    const res = await fetch('/api/make_vertical_video', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        video_path: videoPath,
+        out_dir: document.getElementById('proc-out')?.value?.trim() || '',
+        target_w: tw,
+        target_h: th,
+        blur_height_pct: parseFloat(document.getElementById('vert-blur-height')?.value || '18') / 100,
+        blur_strength: parseInt(document.getElementById('vert-blur-strength')?.value || '40', 10),
+        shadow_opacity: parseFloat(document.getElementById('vert-shadow-opacity')?.value || '0.55'),
+      }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      if (logBox) logBox.innerHTML = `<span style="color:#4caf50">✓ Xong: ${data.output_path}</span>`;
+      _procFileQueueAdd(data.output_path);
+    } else {
+      if (logBox) logBox.innerHTML = `<span style="color:#ff5555">✗ Lỗi: ${data.error}</span>`;
+    }
+  } catch (e) {
+    if (logBox) logBox.innerHTML = `<span style="color:#ff5555">✗ ${e.message}</span>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '📱 Tạo video dọc'; }
   }
 }

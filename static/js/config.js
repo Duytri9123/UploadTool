@@ -71,6 +71,8 @@ async function loadConfig() {
   const tr = cfg.translation || {};
   set('cfg-preferred-provider', tr.preferred_provider || cfg.preferred_provider || 'auto');
   set('cfg-deepseek-key', tr.deepseek_key || '');
+  set('cfg-groq-key', tr.groq_key || '');
+  set('cfg-groq-model', tr.groq_model || 'llama-3.1-8b-instant');
   set('cfg-openai-key', tr.openai_key || '');
   set('cfg-hf-token', tr.hf_token || '');
   setChk('cfg-naming-enabled', tr.naming_enabled !== false);
@@ -124,6 +126,30 @@ async function loadConfig() {
   set('cfg-logo-image-path', af.logo_image || '');
   set('cfg-logo-position', af.logo_position || 'bottom-left');
   set('cfg-logo-opacity', af.logo_opacity ?? 1.0);
+  // Color grading
+  const brightness = af.brightness ?? 0.02;
+  const contrast   = af.contrast   ?? 1.03;
+  const saturation = af.saturation ?? 1.05;
+  const sharpness  = af.sharpness  ?? 0.5;
+  set('cfg-brightness', brightness);
+  set('cfg-contrast',   contrast);
+  set('cfg-saturation', saturation);
+  set('cfg-sharpness',  sharpness);
+  set('cfg-scale-w', af.scale_w ?? 0);
+  set('cfg-scale-h', af.scale_h ?? 0);
+  const bEl = document.getElementById('cfg-brightness-val');  if (bEl) bEl.textContent = (brightness > 0 ? '+' : '') + parseFloat(brightness).toFixed(2);
+  const cEl = document.getElementById('cfg-contrast-val');    if (cEl) cEl.textContent = parseFloat(contrast).toFixed(2);
+  const sEl = document.getElementById('cfg-saturation-val');  if (sEl) sEl.textContent = parseFloat(saturation).toFixed(2);
+  const shEl = document.getElementById('cfg-sharpness-val');  if (shEl) shEl.textContent = parseFloat(sharpness).toFixed(1);
+  // Transform
+  const cropPct = af.crop_pct ?? 0.03;
+  const speed   = af.speed    ?? 1.0;
+  set('cfg-crop-pct', cropPct);
+  set('cfg-speed', speed);
+  setChk('cfg-flip-h', af.flip_h === true);
+  setChk('cfg-vignette', af.vignette !== false);
+  const cpEl = document.getElementById('cfg-crop-pct-val'); if (cpEl) cpEl.textContent = Math.round(cropPct * 100) + '%';
+  const spEl = document.getElementById('cfg-speed-val');    if (spEl) spEl.textContent = parseFloat(speed).toFixed(2) + 'x';
 }
 
 async function saveConfig() {
@@ -158,6 +184,8 @@ async function saveConfig() {
     translation: {
       preferred_provider: get('cfg-preferred-provider'),
       deepseek_key: get('cfg-deepseek-key'),
+      groq_key: get('cfg-groq-key'),
+      groq_model: get('cfg-groq-model') || 'llama-3.1-8b-instant',
       openai_key: get('cfg-openai-key'),
       hf_token: get('cfg-hf-token'),
       naming_enabled: getChk('cfg-naming-enabled'),

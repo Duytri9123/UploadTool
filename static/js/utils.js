@@ -52,3 +52,31 @@ function fmtDur(ms) {
 function escHtml(s) {
   return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
+
+/* ── Tab Switching Helpers (Supports Scrollable Overview) ────────────────── */
+function switchSubTab(el, tabId, itemClass, pageClass) {
+  if (!el || !tabId) return;
+  const target = document.getElementById(tabId);
+  if (!target) return;
+
+  // If it's a scrollable page (new design)
+  if (target.classList.contains('proc-section') || target.classList.contains('cfg-section')) {
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    
+    // Update active nav button
+    document.querySelectorAll('.' + itemClass).forEach(m => m.classList.remove('active'));
+    el.classList.add('active');
+    return;
+  }
+
+  // Toggling visibility (classic design)
+  document.querySelectorAll('.' + itemClass).forEach(m => m.classList.remove('active'));
+  el.classList.add('active');
+
+  document.querySelectorAll('.' + pageClass).forEach(p => p.classList.remove('active'));
+  target.classList.add('active');
+}
+
+// Shorthands for components
+function switchConfigTab(el, id) { switchSubTab(el, id, 'config-menu-item', 'config-subpage'); }
+function switchProcTab(el, id) { switchSubTab(el, id, 'proc-menu-item', 'proc-subpage'); }

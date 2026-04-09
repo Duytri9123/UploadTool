@@ -1,267 +1,441 @@
-      <!-- PAGE: VIDEO PROCESSING -->
       <div id="page-process" class="page">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start">
-          <div>
-            <div class="card">
-              <div class="card-header"><span class="card-title" data-i18n="lbl_process_settings">Cai dat xu ly video</span></div>
-              <div class="field">
-                <label data-i18n="lbl_import_file">Import file</label>
-                <div class="flex-center gap-8">
-                  <input type="text" id="proc-video" placeholder="./Downloaded/.../video.mp4" readonly style="flex:1">
-                  <button class="btn btn-secondary btn-sm" type="button" onclick="document.getElementById('proc-file')?.click()" data-i18n="btn_import_file">Import</button>
-                  <input type="file" id="proc-file" accept="video/*" style="display:none">
-                </div>
-                <div class="text-xs text-muted" id="proc-file-name">--</div>
-              </div>
-              <div class="field">
-                <label data-i18n="lbl_video_url">URL video (tai va xu ly)</label>
-                <input type="text" id="proc-url" placeholder="https://www.douyin.com/video/...">
-              </div>
-              <div class="field">
-                <label data-i18n="lbl_output_dir">Thu muc xuat</label>
-                <input type="text" id="proc-out" placeholder="De trong = cung thu muc video">
-              </div>
-            </div>
+        <style>
+          .proc-wrapper {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding-bottom: 50px;
+          }
+          
+          /* Quick Navigation bar on top */
+          .proc-nav-top {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 24px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: var(--bg);
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border);
+          }
+          .proc-btn-nav {
+            padding: 8px 16px;
+            background: var(--bg2);
+            border: 1px solid var(--border);
+            border-radius: 30px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: var(--text2);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+          }
+          .proc-btn-nav:hover { background: var(--bg3); border-color: var(--accent); color: var(--text); }
+          .proc-btn-nav.active { background: var(--accent); color: white; border-color: var(--accent); }
+          
+          /* Sections */
+          .proc-section { margin-bottom: 30px; animation: fadeIn 0.5s ease; }
+          .proc-section-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid var(--accent);
+            width: fit-content;
+          }
+          .proc-section-title { font-size: 1.2rem; font-weight: 700; color: var(--text); }
+          .proc-section-icon { font-size: 1.4rem; }
 
-            <div class="card">
-              <div class="card-header">
-                <span class="card-title">Hậu xử lý video sau khi tải</span>
-              </div>
-              <div class="check-grid mb-12" style="grid-template-columns:repeat(2,minmax(0,1fr));">
-                <label class="check-item">
-                  <input type="checkbox" id="proc-burn" checked>
-                  <span>Chèn phụ đề lên video</span>
-                </label>
-                <label class="check-item">
-                  <input type="checkbox" id="proc-translate-subs" checked>
-                  <span>Tạo bản dịch tiếng Việt</span>
-                </label>
-                <label class="check-item">
-                  <input type="checkbox" id="proc-burn-vi" checked>
-                  <span>Burn phụ đề tiếng Việt</span>
-                </label>
-                <label class="check-item">
-                  <input type="checkbox" id="proc-voice" checked>
-                  <span>Đổi giọng tiếng Việt</span>
-                </label>
-                <label class="check-item">
-                  <input type="checkbox" id="proc-keep-bg" checked>
-                  <span>Giữ nhạc nền</span>
-                </label>
-                <label class="check-item">
-                  <input type="checkbox" id="proc-blur-original" checked>
-                  <span>Che phụ đề gốc</span>
-                </label>
-              </div>
-              <div class="grid-2" style="gap:12px; margin-top:8px;">
-                <div class="field">
-                  <label>Cỡ chữ phụ đề</label>
-                  <input type="number" id="proc-font-size" min="12" max="72" step="1" value="32" style="width:100%">
-                </div>
-                <div class="field">
-                  <label>Vị trí phụ đề</label>
-                  <select id="proc-sub-pos" style="width:100%;">
-                    <option value="bottom" selected>Dưới</option>
-                    <option value="top">Trên</option>
-                  </select>
-                </div>
-              </div>
-              <div class="field" style="margin-top:8px">
-                <label>Khoảng cách đáy (margin_v)</label>
-                <input type="number" id="proc-margin-v" min="0" max="100" step="1" value="20" style="width:100px">
-              </div>
-              <div style="display:flex;gap:12px;margin-top:12px;align-items:end;flex-wrap:wrap">
-                <div class="field" style="flex:1;min-width:120px">
-                  <label>TTS Engine</label>
-                  <select id="proc-tts-engine" onchange="_syncVoiceOptions('proc-tts-engine','proc-tts-voice')">
-                    <option value="fpt-ai" selected>FPT AI</option>
-                    <option value="openai-tts">OpenAI TTS</option>
-                    <option value="edge-tts">Edge TTS (Microsoft)</option>
-                    <option value="gtts">gTTS (Google)</option>
-                  </select>
-                </div>
-                <div class="field" style="flex:1;min-width:120px">
-                  <label>Giọng đọc</label>
-                  <select id="proc-tts-voice"></select>
-                </div>
-                <div class="field" style="flex:2;min-width:180px">
-                  <label>Thử giọng</label>
-                  <div style="display:flex;gap:6px">
-                    <input type="text" id="proc-preview-text" placeholder="Nhập nội dung thử..." style="flex:1">
-                    <button type="button" id="btn-proc-preview" class="btn btn-sm btn-secondary" onclick="previewProcVoice()">▶ Nghe thử</button>
-                  </div>
-                  <audio id="proc-preview-audio" controls style="display:none;width:100%;margin-top:6px"></audio>
-                </div>
-              </div>
-              <div class="alert-info" style="margin-top:8px">
-                <span style="font-size:13px">Các tùy chọn chi tiết hơn được cấu hình trong trang Cấu hình.</span>
-              </div>
-            </div>
+          /* Feature Grid - Cards */
+          .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 16px;
+            margin-bottom: 20px;
+          }
+          .feature-card {
+            background: var(--bg3);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            border-left: 4px solid transparent;
+          }
+          .feature-card:hover { transform: translateY(-2px); border-color: var(--accent); background: var(--bg2); }
+          .feature-card input { position: absolute; opacity: 0; }
+          .feature-card .check-marker {
+            width: 22px; height: 22px;
+            border: 2px solid var(--text2);
+            border-radius: 6px;
+            display: flex; align-items: center; justify-content: center;
+            flex-shrink: 0;
+          }
+          .feature-card input:checked + .check-marker { background: var(--accent); border-color: var(--accent); }
+          .feature-card input:checked + .check-marker::after { content: "✓"; color: white; font-size: 12px; }
+          .feature-card .check-label { font-size: 13px; font-weight: 600; color: var(--text2); }
+          .feature-card:has(input:checked) { border-left-color: var(--accent); background: rgba(108,99,255,0.05); }
 
-            <div class="btn-group">
-              <button class="btn btn-primary" id="btn-proc" onclick="startProcessVideo()" data-i18n="btn_process_video">Xử lý Video</button>
-            </div>
+          /* Batch Task Cards */
+          .batch-task-card {
+            background: var(--bg2);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 12px 16px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            transition: all 0.2s;
+            border-left: 4px solid transparent;
+          }
+          .batch-task-card.pending { border-left-color: var(--dim); }
+          .batch-task-card.processing { border-left-color: var(--accent); background: rgba(108,99,255,0.05); }
+          .batch-task-card.done { border-left-color: #4caf50; }
+          .batch-task-card.error { border-left-color: #f44336; }
+
+          /* Action Bar */
+          .final-action-bar {
+            position: sticky;
+            bottom: 20px;
+            display: flex;
+            justify-content: center;
+            pointer-events: none;
+            z-index: 101;
+          }
+          .btn-execute {
+            pointer-events: auto;
+            padding: 16px 80px;
+            font-size: 1.2rem;
+            font-weight: 800;
+            border-radius: 50px;
+            background: linear-gradient(135deg, var(--accent), #8278ff);
+            color: white;
+            box-shadow: 0 10px 30px rgba(108,99,255,0.4);
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+          }
+          .btn-execute:hover { transform: scale(1.05) translateY(-5px); box-shadow: 0 15px 40px rgba(108,99,255,0.6); }
+
+          .tts-box {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px;
+            margin-top: 20px;
+          }
+        </style>
+
+        <div class="proc-wrapper">
+          <!-- NAVIGATION JUMPERS -->
+          <div class="proc-nav-top">
+            <button class="proc-btn-nav active" onclick="switchProcTab(this, 'sec-prep')">🛠️ <span data-i18n="proc_tab_main">Chuẩn bị</span></button>
+            <button class="proc-btn-nav" onclick="switchProcTab(this, 'sec-vertical')">📱 <span data-i18n="proc_tab_vertical">Dọc 9:16</span></button>
+            <button class="proc-btn-nav" onclick="switchProcTab(this, 'sec-publish')">🚀 <span data-i18n="proc_tab_publish">Đăng tải</span></button>
+            <button class="proc-btn-nav" onclick="switchProcTab(this, 'sec-logs')">📋 <span data-i18n="proc_tab_log">Tiến trình</span></button>
           </div>
 
-          <!-- Right: Progress + Log -->
-          <div>
-            <div class="card" style="margin-bottom:14px">
-              <div class="card-header">
-                <span class="card-title">📤 Đăng video</span>
-                <div class="card-actions"><span class="text-xs text-muted" id="publish-status">Chưa chọn</span></div>
-              </div>
-
-              <!-- Multi-file import -->
-              <div class="field">
-                <label>📁 File cần đăng <span style="color:var(--dim);font-size:11px">(chọn nhiều file)</span></label>
-                <div class="flex-center gap-8">
-                  <button class="btn btn-secondary btn-sm" type="button" onclick="document.getElementById('publish-file-input')?.click()">+ Thêm file</button>
-                  <input type="file" id="publish-file-input" accept="video/*" multiple style="display:none" onchange="handlePublishFileInput(this)">
-                  <button class="btn btn-secondary btn-sm" type="button" onclick="window._procFileQueue=[];_renderProcFileList()" style="color:#ff5555">Xóa tất cả</button>
-                </div>
-                <div style="font-size:11px;color:var(--dim);margin-top:4px">Hoặc xử lý video bên trái → file output sẽ tự động được thêm vào đây</div>
-                <div id="proc-file-list" style="margin-top:8px;display:flex;flex-direction:column;gap:4px"></div>
-              </div>
-
-              <!-- Platform -->
-              <div class="field">
-                <label>Nền tảng</label>
-                <select id="publish-platform" onchange="switchPublishPlatform(this.value)">
-                  <option value="youtube" selected>▶ YouTube</option>
-                  <option value="tiktok">🎵 TikTok</option>
-                  <option value="both">🚀 Cả 2 (TikTok + YouTube)</option>
-                </select>
-              </div>
-              <div class="field">
-                <label class="check-item" style="display:flex;align-items:center;gap:8px;cursor:pointer">
-                  <input type="checkbox" id="publish-auto-upload">
-                  <span>Tự động đăng sau khi xử lý xong</span>
-                </label>
-              </div>
-
-              <div id="publish-youtube-panel">
+          <!-- SECTION 1: SOURCE & AI -->
+          <section id="sec-prep" class="proc-section">
+            <div class="proc-section-header">
+              <span class="proc-section-icon">🛠️</span>
+              <span class="proc-section-title" data-i18n="lbl_process_settings">Nguồn Video & Xử lý AI</span>
+            </div>
+            
+            <div class="card">
+              <div class="grid-2 gap-20">
                 <div class="field">
-                  <label>Trạng thái YouTube</label>
-                  <div id="yt-channel-info" style="padding:8px;background:rgba(0,0,0,.2);border-radius:4px;font-size:12px;display:none">
-                    <div><strong>Channel</strong>: <span id="yt-ch-name">--</span></div>
-                    <div><strong>Subscribers</strong>: <span id="yt-ch-subs">--</span></div>
-                    <div><strong>Videos</strong>: <span id="yt-ch-videos">--</span></div>
+                  <label data-i18n="lbl_import_file">Tệp từ máy tính</label>
+                  <div class="flex gap-8">
+                    <input type="text" id="proc-video" placeholder="Chọn tệp mp4..." readonly style="flex:1">
+                    <button class="btn btn-secondary" onclick="document.getElementById('proc-file').click()">Import</button>
+                    <button class="btn btn-secondary" onclick="_addProcTask('file')">➕ Add to Queue</button>
+                    <input type="file" id="proc-file" style="display:none" onchange="document.getElementById('proc-video').value=this.files[0].name">
                   </div>
-                  <div id="yt-auth-needed" style="display:none"></div>
-                </div>
-                <div class="btn-group" style="gap:8px">
-                  <button class="btn btn-secondary btn-sm" id="btn-yt-auth" onclick="youtubeLogin()" data-i18n="btn_youtube_login">Đăng nhập YouTube</button>
-                  <button class="btn btn-danger btn-sm" id="btn-yt-logout" onclick="youtubeLogout()" style="display:none" data-i18n="btn_youtube_logout">Đăng xuất</button>
-                </div>
-                <div class="field" style="margin-top:8px">
-                  <label>Tiêu đề YouTube</label>
-                  <input type="text" id="yt-title" placeholder="{title}">
                 </div>
                 <div class="field">
-                  <label>Mô tả</label>
-                  <textarea id="yt-desc" rows="2" placeholder="{title}"></textarea>
+                  <label data-i18n="lbl_video_url">Tải từ URL Douyin</label>
+                  <div class="flex gap-8">
+                    <input type="text" id="proc-url" placeholder="Paste link video tại đây..." style="flex:1">
+                    <button class="btn btn-secondary" onclick="_addProcTask('url')">➕ Add to Queue</button>
+                  </div>
                 </div>
+              </div>
+              
+              <!-- TASK QUEUE LISTING -->
+              <div id="batch-queue-container" class="mt-20 border-top pt-16" style="display:none">
+                <div class="flex justify-between items-center mb-12">
+                   <div class="text-sm fw-700 color-accent uppercase">Hàng chờ xử lý (<span id="queue-count">0</span>)</div>
+                   <button class="btn btn-danger btn-sm" onclick="window._batchQueue=[];_renderBatchQueue()">Xóa hết</button>
+                </div>
+                <div id="batch-queue-list" class="flex flex-col gap-10 max-height-300 overflow-y-auto pr-8"></div>
+              </div>
+            </div>
+
+            <div class="feature-grid mt-24">
+              <label class="feature-card"><input type="checkbox" id="proc-burn" checked><div class="check-marker"></div><span class="check-label">Chèn phụ đề gốc</span></label>
+              <label class="feature-card"><input type="checkbox" id="proc-translate-subs" checked><div class="check-marker"></div><span class="check-label">Dịch Tiếng Việt</span></label>
+              <label class="feature-card"><input type="checkbox" id="proc-burn-vi" checked><div class="check-marker"></div><span class="check-label">Burn phụ đề Việt</span></label>
+              <label class="feature-card"><input type="checkbox" id="proc-blur-original" checked><div class="check-marker"></div><span class="check-label">Che chữ gốc</span></label>
+              <label class="feature-card"><input type="checkbox" id="proc-voice" checked><div class="check-marker"></div><span class="check-label">Lồng tiếng AI</span></label>
+              <label class="feature-card"><input type="checkbox" id="proc-keep-bg" checked><div class="check-marker"></div><span class="check-label">Giữ nhạc nền</span></label>
+            </div>
+
+            <div class="tts-box">
+              <div class="section-title mb-16">Cấu hình Giọng đọc & Phụ đề</div>
+              <div class="grid-3 gap-16 mb-20">
+                <div class="field"><label>Cỡ chữ</label><input type="number" id="proc-font-size" value="32"></div>
+                <div class="field"><label>Vị trí</label><select id="proc-sub-pos"><option value="bottom" selected>Dưới</option><option value="top">Trên</option></select></div>
+                <div class="field"><label>Lề đáy(px)</label><input type="number" id="proc-margin-v" value="20"></div>
+              </div>
+              <div class="grid-2 gap-20">
                 <div class="field">
-                  <label>Chế độ riêng tư</label>
-                  <select id="yt-privacy">
-                    <option value="private" selected>Riêng tư (Private)</option>
-                    <option value="unlisted">Ẩn (Unlisted)</option>
-                    <option value="public">Công khai (Public)</option>
+                  <label>Công cụ lồng tiếng</label>
+                  <select id="proc-tts-engine" onchange="_syncVoiceOptions('proc-tts-engine','proc-tts-voice')">
+                    <option value="fpt-ai">FPT AI (Premium)</option>
+                    <option value="edge-tts" selected>Edge TTS (Microsoft)</option>
+                    <option value="openai-tts">OpenAI TTS</option>
                   </select>
                 </div>
+                <div class="field"><label>Giọng đọc</label><select id="proc-tts-voice"></select></div>
               </div>
+              <div class="grid-2 gap-20 mt-12">
+                <div class="field"><label>Tốc độ: <span id="proc-tts-speed-val" class="text-accent">1.0x</span></label><input type="range" id="proc-tts-speed" min="0.5" max="2.0" step="0.1" value="1.0" oninput="document.getElementById('proc-tts-speed-val').textContent=this.value+'x'"></div>
+                <div class="field"><label>Cao độ: <span id="proc-tts-pitch-val" class="text-accent">0 st</span></label><input type="range" id="proc-tts-pitch" min="-10" max="10" step="0.5" value="0" oninput="document.getElementById('proc-tts-pitch-val').textContent=this.value+' st'"></div>
+              </div>
+              <div class="field mt-16">
+                <label>Nghe thử trước khi chính thức xử lý</label>
+                <div class="flex gap-8">
+                  <input type="text" id="proc-preview-text" placeholder="Gõ thử nội dung tại đây..." style="flex:1">
+                  <button class="btn btn-secondary" onclick="previewProcVoice()">▶ Nghe thử</button>
+                </div>
+                <audio id="proc-preview-audio" controls style="display:none; width:100%; margin-top:12px; height:32px"></audio>
+              </div>
+            </div>
+          </section>
 
-              <div id="publish-tiktok-panel" style="display:none">
-                <div class="field">
-                  <label>Trạng thái TikTok</label>
-                  <div id="tt-account-info" style="padding:8px;background:rgba(0,0,0,.2);border-radius:4px;font-size:12px;display:none">
-                    <div><strong>Open ID</strong>: <span id="tt-account-openid">--</span></div>
-                    <div><strong>Scope</strong>: <span id="tt-account-scope">--</span></div>
-                  </div>
-                  <div id="tt-auth-needed" style="padding:8px;background:rgba(255,107,107,.1);border-radius:4px;border:1px solid rgba(255,107,107,.3)">
-                    <div style="font-size:12px;color:#ff6b6b">Bạn chưa đăng nhập TikTok API.</div>
-                  </div>
-                </div>
-                <div class="btn-group" style="gap:8px">
-                  <button class="btn btn-secondary btn-sm" id="btn-tt-auth" onclick="tiktokLogin()">Đăng nhập TikTok</button>
-                  <button class="btn btn-danger btn-sm" id="btn-tt-logout" onclick="tiktokLogout()" style="display:none">Đăng xuất</button>
-                </div>
-                <div class="field" style="margin-top:8px">
-                  <label>Tiêu đề TikTok</label>
-                  <input type="text" id="tt-title" placeholder="{title}">
-                </div>
-                <div class="field">
-                  <label>Hashtags <span style="color:var(--dim);font-size:11px">(tự động từ tiếng Trung)</span></label>
-                  <input type="text" id="tt-tags" placeholder="#douyin #vietsub #viral">
-                </div>
-                <div class="field">
-                  <label>Chế độ hiển thị</label>
-                  <select id="tt-privacy">
-                    <option value="SELF_ONLY">Riêng tư</option>
-                    <option value="MUTUAL_FOLLOW_FRIENDS">Bạn bè</option>
-                    <option value="PUBLIC_TO_EVERYONE" selected>Công khai</option>
-                  </select>
-                </div>
-              </div>
-
-              <div class="btn-group" style="gap:8px;margin-top:12px;flex-wrap:wrap">
-                <button class="btn btn-primary btn-sm" onclick="publishSelectedPlatform()" style="background:var(--accent)">
-                  🚀 Đăng video
-                </button>
-                <button class="btn btn-secondary btn-sm" onclick="savePublishSettings()">Lưu cấu hình</button>
-              </div>
-              <div class="log-box" id="publish-log" style="height:160px;display:none;margin-top:8px"></div>
+          <!-- SECTION 2: VERTICAL -->
+          <section id="sec-vertical" class="proc-section">
+            <div class="proc-section-header">
+              <span class="proc-section-icon">📱</span>
+              <span class="proc-section-title">Nâng cấp Video Dọc (9:16)</span>
             </div>
             <div class="card">
-              <div class="card-header">
-                <span class="card-title"><span data-i18n="lbl_queue">Hàng chờ</span> (<span id="queue-count">0</span>)</span>
-                <div class="card-actions">
-                  <button class="btn btn-danger btn-sm" onclick="clearQueue()" data-i18n="btn_clear_queue">Xóa hàng chờ</button>
+              <div class="alert-info mb-16">Tự động thêm Blur nền và Shadow để video ngang trông như quay dọc chuyên nghiệp.</div>
+              <div class="grid-3 gap-16">
+                <div class="field"><label>Blur nền</label><input type="number" id="vert-blur-strength" value="45"></div>
+                <div class="field"><label>Vùng mờ(%)</label><input type="number" id="vert-blur-height" value="18"></div>
+                <div class="field"><label>Bóng đổ</label><input type="number" id="vert-shadow-opacity" value="0.6"></div>
+              </div>
+            </div>
+          </section>
+
+          <!-- SECTION 3: PUBLISH -->
+          <section id="sec-publish" class="proc-section">
+            <div class="proc-section-header">
+              <span class="proc-section-icon">🚀</span>
+              <span class="proc-section-title">Phát hành & Hàng chờ Đăng</span>
+            </div>
+            <div class="card">
+              <div class="field">
+                <label>Danh sách video chuẩn bị đăng</label>
+                <div class="flex gap-8 mb-8">
+                  <button class="btn btn-secondary btn-sm" onclick="document.getElementById('publish-file-input').click()">+ Thêm Video</button>
+                  <button class="btn btn-danger btn-sm" onclick="window._procFileQueue=[];_renderProcFileList()">Xóa hết</button>
+                  <input type="file" id="publish-file-input" multiple style="display:none" onchange="handlePublishFileInput(this)">
                 </div>
+                <div id="proc-file-list" class="mt-8 flex flex-col gap-6"></div>
               </div>
-              <div class="flex-center gap-8 mb-12">
-                <input type="text" id="manual-url" data-i18n="placeholder_manual_url" data-i18n-attr="placeholder" placeholder="Dán URL video..." style="flex:1">
-                <button class="btn btn-secondary btn-sm" onclick="addManualUrl()" data-i18n="btn_add">Thêm</button>
+              <div class="grid-2 gap-20 mt-16">
+                <div class="field"><label>Nền tảng</label><select id="publish-platform"><option value="youtube">YouTube</option><option value="tiktok">TikTok</option><option value="both">Cả hai</option></select></div>
+                <div class="field" style="padding-top:25px"><label class="check-item"><input type="checkbox" id="publish-auto-upload"><span>Tự động đăng bài sau khi xử lý xong</span></label></div>
               </div>
-              <div id="queue-list" style="max-height:280px;overflow-y:auto">
-                <div class="empty-state" data-i18n="lbl_queue_empty">Hàng chờ trống</div>
-              </div>
-              <div style="display:flex;align-items:center;gap:10px;margin-top:10px">
-                <label style="font-size:12px;color:var(--dim);white-space:nowrap">Song song:</label>
-                <input type="range" id="queue-concurrency" min="1" max="4" step="1" value="2"
-                  oninput="document.getElementById('queue-concurrency-val').textContent=this.value"
-                  style="flex:1;accent-color:var(--accent)">
-                <span id="queue-concurrency-val" style="font-size:12px;min-width:16px">2</span>
-                <span style="font-size:11px;color:var(--dim)">(khuyến nghị: 2)</span>
-              </div>
-              <button class="btn btn-primary" id="btn-dl" onclick="startQueueDownload()" style="width:100%;justify-content:center;margin-top:10px" data-i18n="btn_start_dl">
-                Chạy hàng chờ
-              </button>
             </div>
+          </section>
 
-            <div class="card">
-              <div class="card-header"><span class="card-title" data-i18n="lbl_progress">Tien trinh</span></div>
-              <div class="progress-row">
-                <span class="progress-label" data-i18n="lbl_overall">Tong the</span>
-                <div class="progress-bar-wrap"><div class="progress-bar pb-overall" id="pb-proc-overall"></div></div>
-                <span class="progress-pct" id="pb-proc-overall-pct">0%</span>
-              </div>
-              <div class="progress-info text-muted" id="lbl-proc-overall">--</div>
+          <!-- SECTION 4: LOGS -->
+          <section id="sec-logs" class="proc-section">
+            <div class="proc-section-header">
+              <span class="proc-section-icon">📋</span>
+              <span class="proc-section-title">Trạng thái & Tiến trình</span>
             </div>
             <div class="card">
-              <div class="card-header">
-                <span class="card-title" data-i18n="lbl_log">Nhat ky</span>
-                <div class="card-actions"><button class="btn btn-secondary btn-sm" onclick="clearLog('proc-log')" data-i18n="btn_clear_log">Xoa</button></div>
+              <div class="progress-section p-0">
+                 <div class="progress-row">
+                    <span class="progress-label">Tổng quan</span>
+                    <div class="progress-bar-wrap"><div class="progress-bar" id="pb-proc-overall" style="width:0%"></div></div>
+                    <span class="progress-pct" id="pb-proc-overall-pct">0%</span>
+                 </div>
+                 <div id="lbl-proc-overall" class="text-xs mt-4 text-muted">Hệ thống đang sẵn sàng...</div>
               </div>
-              <div class="log-box" id="proc-log" style="height:360px"></div>
+              <div class="log-box mt-16" id="proc-log" style="height:350px; font-size:11px"></div>
             </div>
+          </section>
 
-            <!-- Output info -->
-            <div class="card" id="proc-result" style="display:none">
-              <div class="card-header"><span class="card-title" data-i18n="lbl_output_files">File dau ra</span></div>
-              <div id="proc-result-content" class="text-sm" style="line-height:1.8"></div>
-            </div>
-
+          <!-- STICKY ACTION BUTTON -->
+          <div class="final-action-bar">
+            <button class="btn-execute" id="btn-proc-main" onclick="_runBatchQueueFlow()">
+              ✨ BẮT ĐẦU XỬ LÝ HÀNG CHỜ
+            </button>
           </div>
         </div>
+
+        <script>
+          /* ── Batch Processing Logic ────────────────────────────────────────────── */
+          window._batchQueue = [];
+          window._isBatchProcessing = false;
+
+          function _addProcTask(type) {
+            const urlEl = document.getElementById('proc-url');
+            const pathEl = document.getElementById('proc-video');
+            const val = (type === 'url') ? urlEl.value.trim() : pathEl.value.trim();
+            if (!val) { toast('Vui lòng nhập URL hoặc file', 'warning'); return; }
+
+            const task = {
+              id: 'bt-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+              type: type,
+              val: val,
+              status: 'pending',
+              settings: {
+                burn_subs: document.getElementById('proc-burn')?.checked ?? true,
+                blur_original: document.getElementById('proc-blur-original')?.checked ?? true,
+                translate_subs: document.getElementById('proc-translate-subs')?.checked ?? true,
+                burn_vi_subs: document.getElementById('proc-burn-vi')?.checked ?? true,
+                voice_convert: document.getElementById('proc-voice')?.checked ?? false,
+                keep_bg_music: document.getElementById('proc-keep-bg')?.checked ?? false,
+                font_size: parseInt(document.getElementById('proc-font-size')?.value || '32', 10),
+                subtitle_position: document.getElementById('proc-sub-pos')?.value || 'bottom',
+                margin_v: parseInt(document.getElementById('proc-margin-v')?.value || '20', 10),
+                tts_engine: document.getElementById('proc-tts-engine')?.value || 'edge-tts',
+                tts_voice: document.getElementById('proc-tts-voice')?.value || 'vi-VN-HoaiMyNeural',
+                tts_speed: parseFloat(document.getElementById('proc-tts-speed')?.value || '1.0'),
+                pitch_semitones: parseFloat(document.getElementById('proc-tts-pitch')?.value || '0.0'),
+              }
+            };
+            window._batchQueue.push(task);
+            if (type === 'url') urlEl.value = '';
+            _renderBatchQueue();
+            toast('Đã thêm vào hàng chờ!', 'success');
+          }
+
+          function _renderBatchQueue() {
+            const container = document.getElementById('batch-queue-container');
+            const list = document.getElementById('batch-queue-list');
+            const countEl = document.getElementById('queue-count');
+            if (!list) return;
+
+            if (window._batchQueue.length === 0) { container.style.display = 'none'; return; }
+            container.style.display = 'block';
+            countEl.textContent = window._batchQueue.length;
+            list.innerHTML = window._batchQueue.map(t => {
+              const shortVal = t.val.length > 60 ? t.val.substring(0, 57) + '...' : t.val;
+              return `
+                <div id="${t.id}" class="batch-task-card ${t.status}">
+                  <div style="flex:1">
+                    <div style="font-size:13px; font-weight:600">${shortVal}</div>
+                    <div style="font-size:11px; color:var(--text2)">${t.settings.tts_engine} | ${t.settings.tts_voice}</div>
+                  </div>
+                  <div style="font-size:10px; font-weight:700; text-transform:uppercase" class="status-lbl">${t.status}</div>
+                  ${t.status === 'pending' ? `<button class="btn btn-sm" onclick="_removeBatchTask('${t.id}')">✕</button>` : ''}
+                </div>
+              `;
+            }).join('');
+          }
+
+          function _removeBatchTask(id) {
+            window._batchQueue = window._batchQueue.filter(t => t.id !== id);
+            _renderBatchQueue();
+          }
+
+          async function _runBatchQueueFlow() {
+            const pending = window._batchQueue.filter(t => t.status === 'pending');
+            if (pending.length === 0) {
+              // If nothing in queue, but there is info in inputs, add it and run
+              const url = document.getElementById('proc-url')?.value?.trim();
+              const file = document.getElementById('proc-video')?.value?.trim();
+              if (url || file) {
+                 _addProcTask(url ? 'url' : 'file');
+                 setTimeout(_runBatchQueueFlow, 100);
+                 return;
+              }
+              toast('Hàng chờ trống!', 'warning');
+              return;
+            }
+
+            if (window._isBatchProcessing) return;
+            window._isBatchProcessing = true;
+            const btn = document.getElementById('btn-proc-main');
+            if (btn) btn.disabled = true;
+
+            for (const task of window._batchQueue) {
+              if (task.status !== 'pending') continue;
+              task.status = 'processing';
+              _renderBatchQueue();
+              document.getElementById('sec-logs').scrollIntoView({behavior:'smooth'});
+              
+              try {
+                await _executeProcessTask(task);
+                task.status = 'done';
+              } catch (e) {
+                task.status = 'error';
+                toast('Lỗi xử lý: ' + task.val, 'error');
+              }
+              _renderBatchQueue();
+            }
+
+            window._isBatchProcessing = false;
+            if (btn) { btn.disabled = false; btn.textContent = '✨ BẮT ĐẦU XỬ LÝ HÀNG CHỜ'; }
+            toast('Đã hoàn thành tất cả task trong hàng chờ!', 'success');
+          }
+
+          async function _executeProcessTask(task) {
+            const body = {
+              ...task.settings,
+              video_path: task.type === 'file' ? task.val : '',
+              video_url: task.type === 'url' ? task.val : '',
+            };
+            const response = await fetch('/api/process_video', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            });
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            const logBox = document.getElementById('proc-log');
+            if (logBox) logBox.innerHTML += `\n>>> ĐANG XỬ LÝ: ${task.val}\n`;
+
+            return new Promise((resolve, reject) => {
+              function pump() {
+                reader.read().then(({ done, value }) => {
+                  if (done) { resolve(); return; }
+                  const chunk = decoder.decode(value);
+                  chunk.split('\n').filter(Boolean).forEach(line => {
+                    try {
+                      const data = JSON.parse(line);
+                      if (data.log) {
+                         logBox.innerHTML += `[Task] ${data.log}\n`;
+                         logBox.scrollTop = logBox.scrollHeight;
+                      }
+                      if (data.overall !== undefined) {
+                         _setProcProgress(data.overall, data.overall_lbl);
+                      }
+                    } catch (e) {}
+                  });
+                  pump();
+                }).catch(reject);
+              }
+              pump();
+            });
+          }
+        </script>
       </div>

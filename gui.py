@@ -118,7 +118,7 @@ def entry(parent, textvariable, width=30, **kw):
 
 def section(parent, title):
     f = tk.LabelFrame(parent, text=f"  {title}  ", bg=BG, fg=ACCENT,
-                      font=("Segoe UI",9,"bold"), relief="flat",
+                      font=("Segoe UI", 10, "bold"), relief="flat",
                       highlightbackground=SURF2, highlightthickness=1)
     return f
 
@@ -187,7 +187,7 @@ class App(tk.Tk):
         nb.pack(fill="both", expand=True, padx=8, pady=6)
 
         tabs = {}
-        for name in ["⚙ Config","🍪 Cookies","⬇ Download","🎙 Transcribe","🗄 History","🎵 TikTok"]:
+        for name in ["⚙ Config","🍪 Cookies","⬇ Download","🎬 Video Process","🗄 History","🎵 TikTok"]:
             f = tk.Frame(nb, bg=BG)
             nb.add(f, text=name)
             tabs[name] = f
@@ -195,7 +195,7 @@ class App(tk.Tk):
         self._build_config(tabs["⚙ Config"])
         self._build_cookies(tabs["🍪 Cookies"])
         self._build_download(tabs["⬇ Download"])
-        self._build_transcribe(tabs["🎙 Transcribe"])
+        self._build_vprocess(tabs["🎬 Video Process"])
         self._build_history(tabs["🗄 History"])
         self._build_tiktok(tabs["🎵 TikTok"])
 
@@ -203,99 +203,161 @@ class App(tk.Tk):
     # TAB 1 — Config
     # ═══════════════════════════════════════════════════════════════════════════
     def _build_config(self, p):
+        # Using a Canvas with Scrollbar for the config tab
         canvas = tk.Canvas(p, bg=BG, highlightthickness=0)
         sb = ttk.Scrollbar(p, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")
         canvas.pack(fill="both", expand=True)
+
         inner = tk.Frame(canvas, bg=BG)
-        win = canvas.create_window((0,0), window=inner, anchor="nw")
-        inner.bind("<Configure>", lambda e: canvas.configure(
-            scrollregion=canvas.bbox("all")))
+        win = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        def _on_frame_configure(e):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        inner.bind("<Configure>", _on_frame_configure)
         canvas.bind("<Configure>", lambda e: canvas.itemconfig(win, width=e.width))
 
-        pad = dict(padx=14, pady=4)
+        # Add mousewheel scrolling
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
 
-        # URLs
-        sec = section(inner, "Download URLs"); sec.pack(fill="x", **pad)
-        lbl(sec,"One URL per line").pack(anchor="w", padx=8, pady=(4,2))
-        self.txt_urls = scrolledtext.ScrolledText(sec, height=5, bg=SURF, fg=FG,
-            insertbackground=FG, font=("Consolas",10), relief="flat", bd=0)
-        self.txt_urls.pack(fill="x", padx=8, pady=(0,8))
+        # Padding settings
+        sec_pad = dict(padx=20, pady=10)
+        inner_pad = dict(padx=15, pady=10)
 
-        # Save path
-        sec2 = section(inner,"Save Path"); sec2.pack(fill="x", **pad)
-        row = tk.Frame(sec2, bg=BG); row.pack(fill="x", padx=8, pady=6)
+        # 1. Download Content
+        sec_content = section(inner, "Nội dung tải về (Download Content)")
+        sec_content.pack(fill="x", **sec_pad)
+        
+        f_url = tk.Frame(sec_content, bg=BG)
+        f_url.pack(fill="x", **inner_pad)
+        lbl(f_url, "Danh sách URL (mỗi dòng một link):", fg=FG, font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 5))
+        self.txt_urls = scrolledtext.ScrolledText(f_url, height=5, bg=SURF, fg=FG,
+            insertbackground=FG, font=("Consolas", 10), relief="flat", bd=0)
+        self.txt_urls.pack(fill="x")
+
+        # 2. Save Settings
+        sec_save = section(inner, "Cấu hình lưu trữ (Storage Settings)")
+        sec_save.pack(fill="x", **sec_pad)
+        
+        f_path = tk.Frame(sec_save, bg=BG)
+        f_path.pack(fill="x", **inner_pad)
+        lbl(f_path, "Thư mục lưu:", fg=FG).grid(row=0, column=0, sticky="w", pady=5)
         self.var_path = tk.StringVar()
-        entry(row, self.var_path, width=52).pack(side="left", padx=(0,6))
-        btn(row,"📁 Browse", self._browse_path).pack(side="left")
+        e_path = entry(f_path, self.var_path, width=50)
+        e_path.grid(row=0, column=1, sticky="ew", padx=10)
+        btn(f_path, "📁 Chọn thư mục", self._browse_path).grid(row=0, column=2, sticky="e")
+        f_path.columnconfigure(1, weight=1)
 
-        # Mode
-        sec3 = section(inner,"Download Mode"); sec3.pack(fill="x", **pad)
-        mrow = tk.Frame(sec3, bg=BG); mrow.pack(anchor="w", padx=8, pady=6)
-        self.mode_vars = {}
-        for m in ["post","like","collect","music","mix","collectmix"]:
-            v = tk.BooleanVar()
-            self.mode_vars[m] = v
-            tk.Checkbutton(mrow, text=m, variable=v, bg=BG, fg=FG,
-                selectcolor=SURF, activebackground=BG, activeforeground=ACCENT,
-                font=("Segoe UI",10)).pack(side="left", padx=6)
-
-        # Numbers
-        sec4 = section(inner,"Max Items per Mode  (0 = unlimited)"); sec4.pack(fill="x", **pad)
-        ngrid = tk.Frame(sec4, bg=BG); ngrid.pack(padx=8, pady=6)
-        self.num_vars = {}
-        for i,m in enumerate(["post","like","collect","music","mix","collectmix"]):
-            tk.Label(ngrid, text=m, bg=BG, fg=DIM, font=("Segoe UI",9)).grid(
-                row=0, column=i, padx=10)
-            v = tk.StringVar(value="0")
-            self.num_vars[m] = v
-            tk.Entry(ngrid, textvariable=v, width=7, bg=SURF, fg=FG,
-                insertbackground=FG, relief="flat", font=("Consolas",10),
-                justify="center").grid(row=1, column=i, padx=10)
-
-        # Options
-        sec5 = section(inner,"Options"); sec5.pack(fill="x", **pad)
-        orow = tk.Frame(sec5, bg=BG); orow.pack(anchor="w", padx=8, pady=6)
+        f_opts = tk.Frame(sec_save, bg=BG)
+        f_opts.pack(fill="x", padx=15, pady=(0, 10))
         self.var_music  = tk.BooleanVar(value=True)
         self.var_cover  = tk.BooleanVar(value=True)
         self.var_json   = tk.BooleanVar(value=True)
         self.var_folder = tk.BooleanVar(value=True)
-        for text,var in [("Download Music","var_music"),("Download Cover","var_cover"),
-                         ("Save JSON","var_json"),("Folder per user","var_folder")]:
-            tk.Checkbutton(orow, text=text, variable=getattr(self,var),
+        
+        opt_list = [
+            ("Tải nhạc nền", "var_music"),
+            ("Tải ảnh bìa", "var_cover"),
+            ("Lưu file JSON", "var_json"),
+            ("Tạo thư mục riêng mỗi user", "var_folder")
+        ]
+        for i, (text, var_name) in enumerate(opt_list):
+            r, c = divmod(i, 2)
+            tk.Checkbutton(f_opts, text=text, variable=getattr(self, var_name),
                 bg=BG, fg=FG, selectcolor=SURF, activebackground=BG,
-                activeforeground=ACCENT, font=("Segoe UI",10)).pack(side="left",padx=8)
+                activeforeground=ACCENT, font=("Segoe UI", 10)).grid(row=r, column=c, sticky="w", padx=10, pady=2)
 
-        # Thread / retry / proxy / dates
-        sec6 = section(inner,"Advanced"); sec6.pack(fill="x", **pad)
-        arow = tk.Frame(sec6, bg=BG); arow.pack(fill="x", padx=8, pady=6)
+        # 3. Download Modes & Limits
+        sec_mode = section(inner, "Chế độ & Giới hạn (Modes & Limits)")
+        sec_mode.pack(fill="x", **sec_pad)
+        
+        f_mode = tk.Frame(sec_mode, bg=BG)
+        f_mode.pack(fill="x", **inner_pad)
+        
+        lbl(f_mode, "Bật chế độ", fg=ACCENT, font=("Segoe UI", 9, "bold")).grid(row=0, column=1, columnspan=2, pady=(0, 5))
+        lbl(f_mode, "Số lượng (0=vô hạn)", fg=ACCENT, font=("Segoe UI", 9, "bold")).grid(row=0, column=3, pady=(0, 5))
+
+        self.mode_vars = {}
+        self.num_vars = {}
+        modes = [
+            ("post", "Bài viết"),
+            ("like", "Yêu thích"),
+            ("collect", "Bộ sưu tập"),
+            ("music", "Nhạc"),
+            ("mix", "Mix"),
+            ("collectmix", "Collect Mix")
+        ]
+        
+        for i, (m, label) in enumerate(modes):
+            # Checkbox
+            v_mode = tk.BooleanVar()
+            self.mode_vars[m] = v_mode
+            tk.Checkbutton(f_mode, text=label, variable=v_mode, bg=BG, fg=FG,
+                selectcolor=SURF, activebackground=BG, activeforeground=ACCENT,
+                font=("Segoe UI", 10), width=12, anchor="w").grid(row=i+1, column=1, sticky="w", padx=(10, 20), pady=2)
+            
+            # Entry
+            v_num = tk.StringVar(value="0")
+            self.num_vars[m] = v_num
+            tk.Entry(f_mode, textvariable=v_num, width=8, bg=SURF, fg=FG,
+                insertbackground=FG, relief="flat", font=("Consolas", 10),
+                justify="center").grid(row=i+1, column=3, padx=10, pady=2)
+        
+        f_mode.columnconfigure(0, weight=1)
+        f_mode.columnconfigure(4, weight=1)
+
+        # 4. Advanced & Filters
+        sec_adv = section(inner, "Nâng cao & Lọc (Advanced & Filters)")
+        sec_adv.pack(fill="x", **sec_pad)
+        
+        f_adv = tk.Frame(sec_adv, bg=BG)
+        f_adv.pack(fill="x", **inner_pad)
+        
         self.var_thread = tk.StringVar(value="5")
         self.var_retry  = tk.StringVar(value="3")
         self.var_proxy  = tk.StringVar()
         self.var_start  = tk.StringVar()
         self.var_end    = tk.StringVar()
-        for label,var,w in [("Threads","var_thread",5),("Retries","var_retry",5),
-                             ("Proxy","var_proxy",24),("Start date","var_start",14),
-                             ("End date","var_end",14)]:
-            tk.Label(arow, text=label, bg=BG, fg=DIM,
-                font=("Segoe UI",9)).pack(side="left", padx=(8,2))
-            entry(arow, getattr(self,var), width=w).pack(side="left", padx=(0,6))
 
-        # Upload
-        sec7 = section(inner,"Auto Upload"); sec7.pack(fill="x", **pad)
-        urow = tk.Frame(sec7, bg=BG); urow.pack(anchor="w", padx=8, pady=6)
+        adv_fields = [
+            ("Số luồng (Threads):", "var_thread", 10),
+            ("Số lần thử lại (Retries):", "var_retry", 10),
+            ("Proxy (IP:PORT):", "var_proxy", 30),
+            ("Từ ngày (YYYY-MM-DD):", "var_start", 15),
+            ("Đến ngày (YYYY-MM-DD):", "var_end", 15)
+        ]
+
+        for i, (label, var_name, w) in enumerate(adv_fields):
+            lbl(f_adv, label, fg=DIM).grid(row=i, column=0, sticky="w", pady=5)
+            entry(f_adv, getattr(self, var_name), width=w).grid(row=i, column=1, sticky="w", padx=10, pady=5)
+
+        # 5. Automation
+        sec_auto = section(inner, "Tự động hóa (Automation)")
+        sec_auto.pack(fill="x", **sec_pad)
+        
+        f_auto = tk.Frame(sec_auto, bg=BG)
+        f_auto.pack(fill="x", **inner_pad)
+        
         self.var_auto_upload = tk.BooleanVar(value=False)
-        tk.Checkbutton(urow, text="Tự động đăng sau khi tải", variable=self.var_auto_upload,
+        tk.Checkbutton(f_auto, text="Tự động đăng sau khi tải", variable=self.var_auto_upload,
             bg=BG, fg=FG, selectcolor=SURF, activebackground=BG,
-            activeforeground=ACCENT, font=("Segoe UI",10)).pack(side="left", padx=(0,12))
-        tk.Label(urow, text="Nền tảng:", bg=BG, fg=DIM, font=("Segoe UI",9)).pack(side="left", padx=(0,4))
+            activeforeground=ACCENT, font=("Segoe UI", 10)).grid(row=0, column=0, sticky="w", pady=5)
+        
+        lbl(f_auto, "Nền tảng:", fg=DIM).grid(row=0, column=1, sticky="w", padx=(20, 5))
         self.var_upload_platform = tk.StringVar(value="tiktok")
-        ttk.Combobox(urow, textvariable=self.var_upload_platform, width=10,
-            values=["tiktok","youtube"], state="readonly").pack(side="left")
+        cb_platform = ttk.Combobox(f_auto, textvariable=self.var_upload_platform, width=12,
+            values=["tiktok","youtube"], state="readonly")
+        cb_platform.grid(row=0, column=2, sticky="w")
 
-        btn(inner,"💾  Save Config", self._save_config, bg=GREEN, fg=BG).pack(
-            anchor="e", padx=14, pady=10)
+        # Save Button
+        btn_save = btn(inner, "  💾  Lưu cấu hình (Save Config)  ", self._save_config, bg=GREEN, fg=BG)
+        btn_save.config(font=("Segoe UI", 11, "bold"))
+        btn_save.pack(pady=20, padx=20, anchor="center")
 
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 2 — Cookies
@@ -356,72 +418,135 @@ class App(tk.Tk):
         btn(brow,"🗑  Clear Log", lambda: self._clear_log(self.dl_log)).pack(side="left",padx=4)
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # TAB 4 — Transcribe (Whisper local)
     # ═══════════════════════════════════════════════════════════════════════════
-    def _build_transcribe(self, p):
-        pad = dict(padx=14, pady=5)
+    # TAB 4 — Video Process (Sub-tabbed)
+    # ═══════════════════════════════════════════════════════════════════════════
+    def _build_vprocess(self, p):
+        # Create a container with a sidebar and a content area
+        p_container = tk.Frame(p, bg=BG)
+        p_container.pack(fill="both", expand=True)
 
-        sec1 = section(p,"Source"); sec1.pack(fill="x", **pad)
-        r1 = tk.Frame(sec1, bg=BG); r1.pack(fill="x", padx=8, pady=6)
-        self.var_tr_dir = tk.StringVar(value="./Downloaded")
-        tk.Label(r1, text="Video folder:", bg=BG, fg=DIM,
-                 font=("Segoe UI",9)).pack(side="left")
-        entry(r1, self.var_tr_dir, width=44).pack(side="left", padx=6)
-        btn(r1,"📁", lambda: self._browse_dir(self.var_tr_dir)).pack(side="left")
+        # Sidebar
+        p_sidebar = tk.Frame(p_container, bg=BG2, width=160, highlightbackground=SURF, highlightthickness=1)
+        p_sidebar.pack(side="left", fill="y")
+        p_sidebar.pack_propagate(False)
 
-        r2 = tk.Frame(sec1, bg=BG); r2.pack(fill="x", padx=8, pady=(0,6))
-        self.var_tr_file = tk.StringVar()
-        tk.Label(r2, text="Single file:  ", bg=BG, fg=DIM,
-                 font=("Segoe UI",9)).pack(side="left")
-        entry(r2, self.var_tr_file, width=44).pack(side="left", padx=6)
-        btn(r2,"📄", lambda: self._browse_file(self.var_tr_file)).pack(side="left")
+        # Content area
+        p_main = tk.Frame(p_container, bg=BG)
+        p_main.pack(side="left", fill="both", expand=True)
 
-        sec2 = section(p,"Options"); sec2.pack(fill="x", **pad)
-        orow = tk.Frame(sec2, bg=BG); orow.pack(fill="x", padx=8, pady=6)
+        frames = {}
+        
+        # Sub-page creation
+        f_transcribe = tk.Frame(p_main, bg=BG)
+        f_vertical = tk.Frame(p_main, bg=BG)
+        frames["transcribe"] = f_transcribe
+        frames["vertical"] = f_vertical
 
-        tk.Label(orow, text="Model:", bg=BG, fg=DIM,
-                 font=("Segoe UI",9)).pack(side="left", padx=(0,4))
-        self.var_tr_model = tk.StringVar(value="base")
-        cb = ttk.Combobox(orow, textvariable=self.var_tr_model, width=10,
-                          values=["tiny","base","small","medium","large"],
-                          state="readonly")
-        cb.pack(side="left", padx=(0,12))
+        def show_sub(name):
+            for f in frames.values(): f.pack_forget()
+            frames[name].pack(fill="both", expand=True)
+            for btn_id, b in sidebar_btns.items():
+                if btn_id == name:
+                    b.config(bg=ACCENT, fg="white")
+                else:
+                    b.config(bg=BG2, fg=FG)
 
-        tk.Label(orow, text="Language:", bg=BG, fg=DIM,
-                 font=("Segoe UI",9)).pack(side="left", padx=(0,4))
-        self.var_tr_lang = tk.StringVar(value="zh")
-        entry(orow, self.var_tr_lang, width=6).pack(side="left", padx=(0,12))
+        # Sidebar buttons
+        sidebar_btns = {}
+        b_tr = btn(p_sidebar, "🎙 Transcribe", lambda: show_sub("transcribe"), bg=BG2, pady=10)
+        b_tr.pack(fill="x")
+        sidebar_btns["transcribe"] = b_tr
 
-        tk.Label(orow, text="Output dir:", bg=BG, fg=DIM,
-                 font=("Segoe UI",9)).pack(side="left", padx=(0,4))
-        self.var_tr_out = tk.StringVar(value="./transcripts")
-        entry(orow, self.var_tr_out, width=22).pack(side="left", padx=(0,6))
-        btn(orow,"📁", lambda: self._browse_dir(self.var_tr_out)).pack(side="left", padx=(0,12))
+        b_vt = btn(p_sidebar, "📱 Vertical (9:16)", lambda: show_sub("vertical"), bg=BG2, pady=10)
+        b_vt.pack(fill="x")
+        sidebar_btns["vertical"] = b_vt
 
-        orow2 = tk.Frame(sec2, bg=BG); orow2.pack(anchor="w", padx=8, pady=(0,6))
-        self.var_tr_srt    = tk.BooleanVar(value=False)
-        self.var_tr_skip   = tk.BooleanVar(value=True)
-        self.var_tr_sc     = tk.BooleanVar(value=False)
-        for text,var in [("Output SRT","var_tr_srt"),
-                         ("Skip existing","var_tr_skip"),
-                         ("Traditional→Simplified (OpenCC)","var_tr_sc")]:
-            tk.Checkbutton(orow2, text=text, variable=getattr(self,var),
-                bg=BG, fg=FG, selectcolor=SURF, activebackground=BG,
-                activeforeground=ACCENT, font=("Segoe UI",10)).pack(side="left",padx=8)
+        # ─── SUB-PAGE 1: Transcribe & AI ───
+        pad = dict(padx=20, pady=8)
+        
+        # Source
+        sec_src = section(f_transcribe, "Source Video")
+        sec_src.pack(fill="x", **pad)
+        
+        r1 = tk.Frame(sec_src, bg=BG); r1.pack(fill="x", padx=10, pady=6)
+        lbl(r1, "Folder video:").pack(side="left", padx=(0,10))
+        entry(r1, self.var_tr_dir, width=40).pack(side="left", padx=5)
+        btn(r1, "📁", lambda: self._browse_dir(self.var_tr_dir)).pack(side="left")
 
-        # progress
-        pf = tk.Frame(p, bg=SURF); pf.pack(fill="x", padx=14, pady=4)
-        self.pb_tr_overall, self.lv_tr_overall = progress_row(pf,"Overall",0)
-        self.pb_tr_file,    self.lv_tr_file    = progress_row(pf,"File",   1)
+        r2 = tk.Frame(sec_src, bg=BG); r2.pack(fill="x", padx=10, pady=(0,8))
+        lbl(r2, "File đơn lẻ:  ").pack(side="left", padx=(0,10))
+        entry(r2, self.var_tr_file, width=40).pack(side="left", padx=5)
+        btn(r2, "📄", lambda: self._browse_file(self.var_tr_file)).pack(side="left")
+
+        # Options
+        sec_opt = section(f_transcribe, "Transcription Options")
+        sec_opt.pack(fill="x", **pad)
+        
+        orow = tk.Frame(sec_opt, bg=BG); orow.pack(fill="x", padx=10, pady=8)
+        lbl(orow, "Model:").pack(side="left", padx=(0,5))
+        cb_model = ttk.Combobox(orow, textvariable=self.var_tr_model, width=8,
+                               values=["tiny","base","small","medium","large"], state="readonly")
+        cb_model.pack(side="left", padx=(0,15))
+
+        lbl(orow, "Language:").pack(side="left", padx=(0,5))
+        entry(orow, self.var_tr_lang, width=5).pack(side="left", padx=(0,15))
+
+        lbl(orow, "Output:").pack(side="left", padx=(0,5))
+        entry(orow, self.var_tr_out, width=20).pack(side="left", padx=5)
+        btn(orow, "📁", lambda: self._browse_dir(self.var_tr_out)).pack(side="left")
+
+        orow2 = tk.Frame(sec_opt, bg=BG); orow2.pack(fill="x", padx=10, pady=(0,8))
+        self.var_tr_srt  = tk.BooleanVar(value=False)
+        self.var_tr_skip = tk.BooleanVar(value=True)
+        self.var_tr_sc   = tk.BooleanVar(value=False)
+        for t, v in [("Xuất file SRT", "var_tr_srt"), ("Bỏ qua nếu đã có", "var_tr_skip"), ("Phồn thể → Giản thể", "var_tr_sc")]:
+            tk.Checkbutton(orow2, text=t, variable=getattr(self, v), bg=BG, fg=FG, selectcolor=SURF,
+                           font=("Segoe UI", 10)).pack(side="left", padx=10)
+
+        # Progress area (Shared)
+        pf = tk.Frame(f_transcribe, bg=SURF, highlightbackground=SURF2, highlightthickness=1)
+        pf.pack(fill="x", padx=20, pady=10)
+        self.pb_tr_overall, self.lv_tr_overall = progress_row(pf, "Overall", 0)
+        self.pb_tr_file,    self.lv_tr_file    = progress_row(pf, "File", 1)
         pf.columnconfigure(2, weight=1)
 
-        self.tr_log = logbox(p, height=10)
-        self.tr_log.pack(fill="both", expand=True, padx=14, pady=(4,4))
+        self.tr_log = logbox(f_transcribe, height=10)
+        self.tr_log.pack(fill="both", expand=True, padx=20, pady=5)
 
-        brow = tk.Frame(p, bg=BG); brow.pack(fill="x", padx=14, pady=6)
-        self.btn_tr = btn(brow,"▶  Start Transcribe", self._start_transcribe, bg=ACCENT, fg="white")
-        self.btn_tr.pack(side="left", padx=4)
-        btn(brow,"🗑  Clear Log", lambda: self._clear_log(self.tr_log)).pack(side="left",padx=4)
+        f_actions = tk.Frame(f_transcribe, bg=BG)
+        f_actions.pack(fill="x", padx=20, pady=10)
+        self.btn_tr = btn(f_actions, "▶  Start Transcribing", self._start_transcribe, bg=ACCENT, fg="white", padx=25)
+        self.btn_tr.pack(side="left")
+        btn(f_actions, "🗑 Clear Log", lambda: self._clear_log(self.tr_log)).pack(side="left", padx=15)
+
+
+        # ─── SUB-PAGE 2: Vertical Video ───
+        sec_vert = section(f_vertical, "Vertical Conversion (9:16)")
+        sec_vert.pack(fill="x", **pad)
+        
+        lbl(f_vertical, "Chuyển video ngang thành dọc chuyên dụng cho TikTok/Shorts.", fg=DIM).pack(padx=20, pady=(0,10), anchor="w")
+        
+        grid_v = tk.Frame(sec_vert, bg=BG)
+        grid_v.pack(fill="x", padx=10, pady=10)
+        
+        self.var_vert_blur = tk.StringVar(value="40")
+        self.var_vert_height = tk.StringVar(value="18")
+        self.var_vert_shadow = tk.StringVar(value="0.55")
+        
+        v_fields = [
+            ("Độ mạnh Blur:", self.var_vert_blur),
+            ("Chiều cao lớp mờ (%):", self.var_vert_height),
+            ("Độ đục bóng (0-1):", self.var_vert_shadow)
+        ]
+        for i, (l_text, v_var) in enumerate(v_fields):
+            lbl(grid_v, l_text).grid(row=i, column=0, sticky="w", pady=5)
+            entry(grid_v, v_var, width=10).grid(row=i, column=1, sticky="w", padx=10)
+
+        btn(grid_v, "✨ Bắt đầu chuyển đổi 📱", lambda: self._toast("Đang phát triển trên Desktop..."), bg=CYAN, fg="black").grid(row=3, column=0, columnspan=2, pady=15, sticky="ew")
+
+        # Set default sub-page
+        show_sub("transcribe")
 
     # ═══════════════════════════════════════════════════════════════════════════
     # TAB 5 — History

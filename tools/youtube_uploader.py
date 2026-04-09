@@ -231,21 +231,55 @@ class YouTubeUploader:
                 )
             )
             
-            # Execute with progress tracking
+            # Execute with progress tracking + retry on transient network errors
+            import socket
+            import time
+
+            _RETRYABLE_ERRORS = (
+                ConnectionError,
+                TimeoutError,
+                socket.error,
+                OSError,  # covers WinError 10053, 10054, etc.
+            )
+            _MAX_RETRIES = 5
+            _RETRY_DELAYS = [5, 10, 20, 30, 60]
+
             response = None
             percent_complete = 0
-            
+
             while response is None:
-                try:
-                    status, response = request.next_chunk()
-                    if status:
-                        percent_complete = int(status.progress() * 100)
+                for attempt in range(_MAX_RETRIES):
+                    try:
+                        status, response = request.next_chunk()
+                        if status:
+                            percent_complete = int(status.progress() * 100)
+                            if on_progress:
+                                on_progress({'status': 'uploading', 'pct': percent_complete})
+                        break  # success — exit retry loop
+                    except googleapiclient.errors.HttpError as e:
+                        if e.resp.status in (500, 502, 503, 504):
+                            # Server-side transient error — retry
+                            if attempt < _MAX_RETRIES - 1:
+                                delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
+                                if on_progress:
+                                    on_progress({'status': 'retrying', 'pct': percent_complete,
+                                                 'message': f"Server error {e.resp.status}, retry {attempt+1}/{_MAX_RETRIES} in {delay}s"})
+                                time.sleep(delay)
+                                continue
                         if on_progress:
-                            on_progress({'status': 'uploading', 'pct': percent_complete})
-                except googleapiclient.errors.HttpError as e:
-                    if on_progress:
-                        on_progress({'status': 'error', 'message': str(e)})
-                    raise RuntimeError(f"Upload failed: {e}")
+                            on_progress({'status': 'error', 'message': str(e)})
+                        raise RuntimeError(f"Upload failed: {e}")
+                    except _RETRYABLE_ERRORS as e:
+                        if attempt < _MAX_RETRIES - 1:
+                            delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
+                            if on_progress:
+                                on_progress({'status': 'retrying', 'pct': percent_complete,
+                                             'message': f"Network error: {e}, retry {attempt+1}/{_MAX_RETRIES} in {delay}s"})
+                            time.sleep(delay)
+                        else:
+                            if on_progress:
+                                on_progress({'status': 'error', 'message': str(e)})
+                            raise
             
             if on_progress:
                 on_progress({'status': 'success', 'pct': 100})

@@ -1901,6 +1901,45 @@ def youtube_logout():
     return jsonify({"ok": False, "error": "Failed to logout"}), 500
 
 
+@app.route("/api/make_vertical_video", methods=["POST"])
+def make_vertical_video_route():
+    """Chuyển video ngang → dọc 9:16 với 2 lớp mờ gradient đổ bóng trên/dưới."""
+    from core.video_processor import make_vertical_video, find_ffmpeg
+
+    data = request.json or {}
+    video_path = data.get("video_path", "").strip()
+    if not video_path:
+        return jsonify({"ok": False, "error": "Thiếu video_path"}), 400
+
+    from pathlib import Path as _Path
+    vp = _Path(video_path).expanduser()
+    if not vp.exists():
+        return jsonify({"ok": False, "error": f"File không tồn tại: {vp}"}), 404
+
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        return jsonify({"ok": False, "error": "ffmpeg không tìm thấy"}), 500
+
+    out_dir = _Path(data.get("out_dir", "")).expanduser() if data.get("out_dir") else vp.parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+    output_path = out_dir / f"{vp.stem}_vertical.mp4"
+
+    ok, err = make_vertical_video(
+        video_path=vp,
+        output_path=output_path,
+        ffmpeg=ffmpeg,
+        target_w=int(data.get("target_w", 1080)),
+        target_h=int(data.get("target_h", 1920)),
+        blur_height_pct=float(data.get("blur_height_pct", 0.18)),
+        blur_strength=int(data.get("blur_strength", 40)),
+        shadow_opacity=float(data.get("shadow_opacity", 0.55)),
+    )
+
+    if ok:
+        return jsonify({"ok": True, "output_path": str(output_path.resolve())})
+    return jsonify({"ok": False, "error": err}), 500
+
+
 if __name__ == "__main__":
     import webbrowser, time
     APP_HOST = "127.0.0.1"

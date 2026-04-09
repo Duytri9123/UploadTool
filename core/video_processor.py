@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 video_processor.py — Xử lý video sau khi tải:
   1. Burn subtitles (SRT → hardcode vào video)
@@ -170,6 +170,74 @@ _LOGO_POSITION_MAP = {
 }
 
 
+def _build_color_grade_filter(
+    brightness: float = 0.0,
+    contrast: float = 1.0,
+    saturation: float = 1.0,
+    sharpness: float = 0.0,
+    scale_w: int = 0,
+    scale_h: int = 0,
+    crop_pct: float = 0.0,
+    flip_h: bool = False,
+    vignette: bool = False,
+) -> str:
+    """
+    Tạo ffmpeg filter string cho color grading + transform.
+    brightness: -1.0 → 1.0  (0 = không đổi)
+    contrast:   0.5 → 2.0   (1.0 = không đổi)
+    saturation: 0.0 → 3.0   (1.0 = không đổi)
+    sharpness:  0.0 → 5.0   (0 = không đổi)
+    scale_w/h:  0 = giữ nguyên
+    crop_pct:   0.0 → 0.15  - crop % mỗi cạnh rồi scale lại kích thước gốc
+    flip_h:     lật ngang video
+    vignette:   thêm hiệu ứng viền tối
+    """
+    parts = []
+
+    # 1. Crop + zoom lại kích thước gốc (thay đổi framing)
+    if crop_pct and float(crop_pct) > 0.001:
+        p = max(0.0, min(0.15, float(crop_pct)))
+        # crop bỏ p% mỗi cạnh, scale lại về kích thước gốc, đảm bảo chia hết 2
+        parts.append(
+            f"crop=trunc(iw*(1-{p*2:.4f})/2)*2:trunc(ih*(1-{p*2:.4f})/2)*2:trunc(iw*{p:.4f}/2)*2:trunc(ih*{p:.4f}/2)*2,"
+            f"scale=trunc(iw/(1-{p*2:.4f})/2)*2:trunc(ih/(1-{p*2:.4f})/2)*2:flags=lanczos"
+        )
+    # 2. Flip ngang
+    if flip_h:
+        parts.append("hflip")
+
+    # 3. eq filter: brightness/contrast/saturation
+    eq_needed = (brightness != 0.0 or contrast != 1.0 or saturation != 1.0)
+    if eq_needed:
+        b = max(-1.0, min(1.0, float(brightness)))
+        c = max(0.5, min(2.0, float(contrast)))
+        s = max(0.0, min(3.0, float(saturation)))
+        parts.append(f"eq=brightness={b:.3f}:contrast={c:.3f}:saturation={s:.3f}")
+
+    # 4. Sharpness (unsharp mask)
+    if sharpness and float(sharpness) > 0.05:
+        la = min(1.5, float(sharpness) * 0.3)
+        parts.append(f"unsharp=lx=5:ly=5:la={la:.3f}")
+
+    # 5. Vignette (viền tối - thêm chiều sâu, thay đổi visual fingerprint)
+    if vignette:
+        parts.append("vignette=PI/4")
+
+    # 6. Scale output
+    if scale_w and scale_h:
+        parts.append(f"scale={int(scale_w)}:{int(scale_h)}:flags=lanczos")
+    elif scale_w:
+        parts.append(f"scale={int(scale_w)}:-2:flags=lanczos")
+    elif scale_h:
+        parts.append(f"scale=-2:{int(scale_h)}:flags=lanczos")
+
+    # 7. Đảm bảo kích thước luôn chia hết 2 (bắt buộc cho libx264)
+    if parts:
+        parts.append("pad=ceil(iw/2)*2:ceil(ih/2)*2")
+
+    return ",".join(parts) if parts else ""
+
+
 def _build_anti_fingerprint_filter(
     has_overlay: bool,
     overlay_opacity: float,
@@ -179,45 +247,53 @@ def _build_anti_fingerprint_filter(
     logo_padding: int,
     logo_opacity: float,
     n_extra_inputs: int,
+    color_grade: str = "",
 ) -> tuple[str, list[str]]:
     """
     Xây dựng filter_complex string cho anti-fingerprint.
-
-    Returns:
-        (filter_complex_str, ["[vout]"])
+    color_grade: chuỗi filter eq/unsharp/scale từ _build_color_grade_filter()
     """
     P = logo_padding
 
-    # Resolve logo position (fallback to bottom-left if invalid)
     pos_template = _LOGO_POSITION_MAP.get(logo_position, _LOGO_POSITION_MAP["bottom-left"])
     logo_x = pos_template[0].replace("{P}", str(P))
     logo_y = pos_template[1].replace("{P}", str(P))
 
+    # Prefix color grade vào đầu chain nếu có
+    cg_prefix = f"[0:v]{color_grade}[cg_base];" if color_grade else ""
+    base_in = "[cg_base]" if color_grade else "[0:v]"
+
     if has_overlay and not has_logo:
-        # Only overlay — scale overlay to match video size, then blend with opacity
+        # Scale overlay về đúng kích thước video
+        # [1:v] = overlay, {base_in} = video → scale2ref giúp scale overlay khớp kích thước video
         fc = (
-            f"[1:v][0:v]scale2ref[ov][base];"
-            f"[ov]format=rgba,colorchannelmixer=aa={overlay_opacity}[ov_alpha];"
-            f"[base][ov_alpha]overlay=0:0[vout]"
+            f"{cg_prefix}"
+            f"[1:v]{base_in}scale2ref[ov_sized][base_ref];"
+            f"[ov_sized]format=rgba,colorchannelmixer=aa={overlay_opacity}[ov_alpha];"
+            f"[base_ref][ov_alpha]overlay=0:0[vout]"
         )
     elif has_logo and not has_overlay:
-        # Only logo — scale to % of video width, keep aspect ratio
+        # [1:v] = logo, {base_in} = video → scale2ref dùng video làm reference để tính kích thước logo
         fc = (
-            f"[0:v][1:v]scale2ref[base][logo_ref];"
-            f"[logo_ref]scale=iw*{logo_max_width_pct}:h=-2[logo_scaled];"
+            f"{cg_prefix}"
+            f"[1:v]{base_in}scale2ref=w=oh*mdar:h=iw*{logo_max_width_pct}[logo_scaled][base_ref];"
             f"[logo_scaled]format=rgba,colorchannelmixer=aa={logo_opacity}[logo_alpha];"
-            f"[base][logo_alpha]overlay={logo_x}:{logo_y}[vout]"
+            f"[base_ref][logo_alpha]overlay={logo_x}:{logo_y}[vout]"
         )
-    else:
-        # Both overlay + logo — overlay is input 1, logo is input 2
+    elif has_overlay and has_logo:
+        # Overlay trước, rồi ghép logo lên trên
         fc = (
-            f"[1:v][0:v]scale2ref[ov][base];"
-            f"[ov]format=rgba,colorchannelmixer=aa={overlay_opacity}[ov_alpha];"
-            f"[base][ov_alpha]overlay=0:0[with_ov];"
-            f"[with_ov][2:v]scale2ref=w=iw*{logo_max_width_pct}:h=-2[logo_scaled][base2];"
+            f"{cg_prefix}"
+            f"[1:v]{base_in}scale2ref[ov_sized][base_ref];"
+            f"[ov_sized]format=rgba,colorchannelmixer=aa={overlay_opacity}[ov_alpha];"
+            f"[base_ref][ov_alpha]overlay=0:0[with_ov];"
+            f"[2:v][with_ov]scale2ref=w=oh*mdar:h=iw*{logo_max_width_pct}[logo_scaled][base2];"
             f"[logo_scaled]format=rgba,colorchannelmixer=aa={logo_opacity}[logo_alpha];"
             f"[base2][logo_alpha]overlay={logo_x}:{logo_y}[vout]"
         )
+    else:
+        # Chỉ color grade, không overlay/logo — dùng null filter để pass-through
+        fc = f"{cg_prefix}{base_in}null[vout]" if color_grade else ""
 
     return fc, ["[vout]"]
 
@@ -235,41 +311,61 @@ def apply_anti_fingerprint(
     logo_max_width_pct: float = 0.15,
     logo_opacity: float = 1.0,
     logo_padding: int = 10,
+    # Color grading
+    brightness: float = 0.0,
+    contrast: float = 1.0,
+    saturation: float = 1.0,
+    sharpness: float = 0.0,
+    scale_w: int = 0,
+    scale_h: int = 0,
+    # Transform
+    crop_pct: float = 0.0,
+    flip_h: bool = False,
+    vignette: bool = False,
+    speed: float = 1.0,
 ) -> tuple[bool, str]:
     """
-    Áp dụng overlay ảnh bán trong suốt và/hoặc logo thương hiệu vào video.
-    Thực hiện trong một lần encode ffmpeg duy nhất (filter_complex).
-
-    Returns:
-        (True, "") nếu thành công
-        (False, error_msg) nếu thất bại
+    Áp dụng color grading, transform, overlay ảnh và/hoặc logo vào video.
+    speed: 0.95-1.05 thay đổi tốc độ nhẹ (1.0 = không đổi)
     """
     logger = logging.getLogger(__name__)
     project_root = Path(__file__).parent.parent
 
-    # Resolve overlay image
     overlay_path: Optional[Path] = None
     if overlay_image:
         overlay_path = _resolve_image_path(overlay_image, project_root)
         if overlay_path is None:
-            logger.warning("apply_anti_fingerprint: overlay_image không hợp lệ hoặc không tồn tại: %s", overlay_image)
+            logger.warning("apply_anti_fingerprint: overlay_image không hợp lệ: %s", overlay_image)
 
-    # Resolve logo image
     logo_path: Optional[Path] = None
     if logo_image and logo_enabled:
         logo_path = _resolve_image_path(logo_image, project_root)
         if logo_path is None:
-            logger.warning("apply_anti_fingerprint: logo_image không hợp lệ hoặc không tồn tại: %s", logo_image)
-    elif logo_image and not logo_enabled:
-        logger.info("apply_anti_fingerprint: logo_enabled=false, bỏ qua logo_image")
+            logger.warning("apply_anti_fingerprint: logo_image không hợp lệ: %s", logo_image)
 
     has_overlay = overlay_path is not None
     has_logo = logo_enabled and (logo_path is not None)
 
-    if not has_overlay and not has_logo:
-        return False, "no valid images"
+    color_grade = _build_color_grade_filter(
+        brightness, contrast, saturation, sharpness,
+        scale_w, scale_h, crop_pct, flip_h, vignette
+    )
+    has_color = bool(color_grade)
+    has_speed = abs(float(speed) - 1.0) > 0.005
 
-    # Build ffmpeg command
+    if not has_overlay and not has_logo and not has_color and not has_speed:
+        return False, "no valid images or adjustments"
+
+    # Speed tweak cần xử lý cả video + audio PTS
+    # Dùng setpts cho video, atempo cho audio
+    speed_v_filter = ""
+    speed_a_filter = ""
+    if has_speed:
+        s = max(0.5, min(2.0, float(speed)))
+        speed_v_filter = f"setpts={1.0/s:.6f}*PTS"
+        # atempo chỉ hỗ trợ 0.5-2.0
+        speed_a_filter = f"atempo={s:.6f}"
+
     cmd = [ffmpeg, "-y", "-i", str(video_path)]
     if has_overlay:
         cmd += ["-i", str(overlay_path)]
@@ -277,6 +373,9 @@ def apply_anti_fingerprint(
         cmd += ["-i", str(logo_path)]
 
     n_extra_inputs = (1 if has_overlay else 0) + (1 if has_logo else 0)
+
+    # Kết hợp color_grade + speed_v_filter
+    combined_vf = ",".join(f for f in [color_grade, speed_v_filter] if f)
 
     filter_str, _ = _build_anti_fingerprint_filter(
         has_overlay=has_overlay,
@@ -287,23 +386,31 @@ def apply_anti_fingerprint(
         logo_opacity=logo_opacity,
         logo_padding=logo_padding,
         n_extra_inputs=n_extra_inputs,
+        color_grade=combined_vf,
     )
 
-    cmd += [
-        "-filter_complex", filter_str,
-        "-map", "[vout]",
-        "-map", "0:a?",
-        "-c:a", "copy",
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-crf", "23",
-        str(output_path),
-    ]
+    audio_filters = [speed_a_filter] if speed_a_filter else []
+
+    if not has_overlay and not has_logo:
+        # Chỉ vf + audio filter
+        vf_args = ["-vf", combined_vf] if combined_vf else []
+        af_args = ["-af", ",".join(audio_filters)] if audio_filters else ["-c:a", "copy"]
+        cmd += vf_args + ["-map", "0:v", "-map", "0:a?"] + af_args + [
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            str(output_path),
+        ]
+    else:
+        af_args = ["-af", ",".join(audio_filters)] if audio_filters else ["-c:a", "copy"]
+        cmd += [
+            "-filter_complex", filter_str,
+            "-map", "[vout]", "-map", "0:a?",
+        ] + af_args + [
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            str(output_path),
+        ]
 
     ok, err = run_ffmpeg(cmd)
-    if ok:
-        return True, ""
-    return False, err
+    return (True, "") if ok else (False, err)
 
 
 # ── SRT helpers ───────────────────────────────────────────────────────────────
@@ -1733,10 +1840,16 @@ def process_video_full(data: dict) -> Generator[str, None, None]:
             texts = [seg.get("text", "").strip() for seg in segments]
             has_ds = bool(trans_cfg.get("deepseek_key"))
             has_groq = bool(trans_cfg.get("groq_key"))
-            yield send(log=f"[Bước 2/5] Provider: {provider} | deepseek={'✓' if has_ds else '✗'} | groq={'✓' if has_groq else '✗'}", level="info")
+            groq_model_name = trans_cfg.get("groq_model") or "llama-3.1-8b-instant"
+            _provider_info = []
+            if has_ds:   _provider_info.append("deepseek-chat ✓")
+            if has_groq: _provider_info.append(f"{groq_model_name} ✓")
+            if not _provider_info: _provider_info.append("google translate (fallback)")
+            yield send(log=f"[Bước 2/5] Dịch bằng: {' | '.join(_provider_info)} — ưu tiên: {provider}", level="info")
             translator = BatchTranslator(trans_cfg)
             translated_texts, used = translator.translate(texts, provider)
-            yield send(log=f"[Bước 2/5] ✓ Dịch xong {len(translated_texts)} đoạn (provider: {used})", level="success")
+            _used_model = groq_model_name if used == "groq" else ("deepseek-chat" if used == "deepseek" else used)
+            yield send(log=f"[Bước 2/5] ✓ Dịch xong {len(translated_texts)} đoạn — dùng: {_used_model}", level="success")
             yield send(overall=55, overall_lbl="Dịch xong")
 
             if translated_texts:
@@ -1912,6 +2025,16 @@ def process_video_full(data: dict) -> Generator[str, None, None]:
                 logo_max_width_pct=_clamp_float(_as_float(af_cfg.get("logo_max_width_pct", 0.15), 0.15), 0.01, 1.0),
                 logo_opacity=_clamp_float(_as_float(af_cfg.get("logo_opacity", 1.0), 1.0), 0.01, 1.0),
                 logo_padding=_as_int(af_cfg.get("logo_padding", 10), 10),
+                brightness=_as_float(af_cfg.get("brightness", 0.0), 0.0),
+                contrast=_as_float(af_cfg.get("contrast", 1.0), 1.0),
+                saturation=_as_float(af_cfg.get("saturation", 1.0), 1.0),
+                sharpness=_as_float(af_cfg.get("sharpness", 0.0), 0.0),
+                scale_w=_as_int(af_cfg.get("scale_w", 0), 0),
+                scale_h=_as_int(af_cfg.get("scale_h", 0), 0),
+                crop_pct=_as_float(af_cfg.get("crop_pct", 0.0), 0.0),
+                flip_h=_as_bool(af_cfg.get("flip_h", False), False),
+                vignette=_as_bool(af_cfg.get("vignette", False), False),
+                speed=_as_float(af_cfg.get("speed", 1.0), 1.0),
             )
             if ok:
                 final_output_path = af_out
@@ -2078,4 +2201,84 @@ def preview_subtitles_in_video(
 
     if ok and output_path.exists():
         return True, f"Preview created: {output_path}"
+    return False, err
+
+
+def make_vertical_video(
+    video_path: Path,
+    output_path: Path,
+    ffmpeg: str,
+    target_w: int = 1080,
+    target_h: int = 1920,
+    blur_height_pct: float = 0.18,
+    blur_strength: int = 40,
+    shadow_opacity: float = 0.55,
+) -> tuple[bool, str]:
+    """
+    Chuyển video ngang → video dọc 9:16 với 2 lớp mờ gradient đổ bóng trên/dưới.
+
+    Pipeline:
+      1. [bg]   Nền blur: scale fill toàn khung 9:16 rồi boxblur mạnh.
+      2. [fg]   Video gốc: scale vừa chiều rộng target_w, giữ tỉ lệ.
+      3. [comp] Overlay fg lên bg, căn giữa dọc.
+      4. [out]  Dùng geq tạo 2 lớp gradient đen mờ dần (fade) trên/dưới.
+    """
+    video_path = Path(video_path)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if not video_path.exists():
+        return False, f"File không tồn tại: {video_path}"
+
+    tw, th = target_w, target_h
+    grad_h = int(th * max(0.05, min(0.45, blur_height_pct)))
+    alpha = max(0.0, min(1.0, shadow_opacity))
+    # alpha → 0..255
+    a255 = int(alpha * 255)
+
+    # Gradient fade trên: y=0 đậm nhất → y=grad_h trong suốt
+    # Gradient fade dưới: y=th-grad_h trong suốt → y=th đậm nhất
+    # geq: luma=val(X,Y), alpha channel = gradient
+    # Dùng 2 lớp overlay màu đen với alpha gradient qua geq+format=rgba
+    top_geq    = f"geq=r=0:g=0:b=0:a='{a255}*(1-Y/{grad_h})'"
+    bottom_geq = f"geq=r=0:g=0:b=0:a='{a255}*((Y-({th}-{grad_h}))/{grad_h})'"
+
+    filter_complex = (
+        # nền blur fill 9:16
+        f"[0:v]scale={tw}:{th}:force_original_aspect_ratio=increase,"
+        f"crop={tw}:{th},"
+        f"boxblur=luma_radius={blur_strength}:luma_power=3[bg];"
+
+        # video gốc scale vừa width, giữ tỉ lệ
+        f"[0:v]scale={tw}:-2[fg_scaled];"
+
+        # overlay fg lên bg căn giữa dọc
+        f"[bg][fg_scaled]overlay=(W-w)/2:(H-h)/2[comp];"
+
+        # tạo lớp gradient trên (grad_h x tw, rgba)
+        f"[comp]split[comp1][comp2];"
+        f"[comp1]crop={tw}:{grad_h}:0:0,"
+        f"{top_geq}[top_grad];"
+        f"[comp2][top_grad]overlay=0:0[with_top];"
+
+        # tạo lớp gradient dưới
+        f"[with_top]split[wt1][wt2];"
+        f"[wt1]crop={tw}:{grad_h}:0:{th - grad_h},"
+        f"{bottom_geq}[bot_grad];"
+        f"[wt2][bot_grad]overlay=0:{th - grad_h}[out]"
+    )
+
+    cmd = [
+        ffmpeg, "-i", str(video_path),
+        "-filter_complex", filter_complex,
+        "-map", "[out]", "-map", "0:a?",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+        "-c:a", "copy",
+        "-movflags", "+faststart",
+        str(output_path), "-y", "-loglevel", "error",
+    ]
+
+    ok, err = run_ffmpeg(cmd)
+    if ok and output_path.exists():
+        return True, ""
     return False, err

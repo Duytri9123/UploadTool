@@ -58,6 +58,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "translation": {
         "deepseek_key": "",
         "openai_key": "",
+        "groq_key": "",
+        "groq_model": "llama-3.1-8b-instant",
         "hf_token": "",
         "preferred_provider": "deepseek",
         "naming_enabled": True,
