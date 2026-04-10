@@ -146,6 +146,9 @@ const I18N = {
     lbl_translating: 'Đang dịch...',
     lbl_provider_badge: 'Provider:',
     lbl_retranslate_confirm: 'Dịch lại toàn bộ với provider mới?',
+    badge_done: 'Xong', badge_error: 'Lỗi',
+    badge_running: 'Đang chạy', badge_waiting: 'Chờ',
+    lbl_tts_pitch: 'Cao độ', lbl_tts_rate: 'Tốc độ',
   },
   en: {
     nav_user: 'Search User', nav_download: 'Download', nav_config: 'Config',
@@ -293,6 +296,9 @@ const I18N = {
     lbl_translating: 'Translating...',
     lbl_provider_badge: 'Provider:',
     lbl_retranslate_confirm: 'Re-translate all with new provider?',
+    badge_done: 'Done', badge_error: 'Error',
+    badge_running: 'Running', badge_waiting: 'Waiting',
+    lbl_tts_pitch: 'Pitch', lbl_tts_rate: 'Rate',
   }
 };
 

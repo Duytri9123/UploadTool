@@ -1,8 +1,9 @@
 /* ── Download Queue ──────────────────────────────────────────────────────── */
 let _queue = [], _dlRunning = false;
-let _downloadingUrl = null; // URL đang được tải
+let _downloadingUrl = null; 
 let _queueItemProgress = Object.create(null);
 let _queueItemState = Object.create(null);
+let _expandedUrls = new Set();
 
 function _resolveQueueProcessOptions() {
   const burnEnabled = document.getElementById('proc-burn')?.checked ?? true;
@@ -56,74 +57,96 @@ async function loadQueue() {
   renderQueue();
 }
 
+function _renderQueueItem(item) {
+    const isDownloading = item.url === _downloadingUrl;
+    // Proxied image if available, otherwise placeholder
+    const thumb = item.cover ? '/api/proxy_image?url=' + encodeURIComponent(item.cover) : '';
+    const dateStr = item.date || new Date().toISOString().split('T')[0];
+    const isExpanded = _expandedUrls.has(item.url);
+
+    let statusHtml = '';
+    const state = _queueItemState[item.url] || '';
+    if (state === 'done') statusHtml = `<span class="badge badge-green">${t('badge_done')}</span>`;
+    else if (state === 'failed') statusHtml = `<span class="badge badge-red">${t('badge_error')}</span>`;
+    else if (isDownloading) statusHtml = `<span class="badge badge-accent">${t('badge_running')}...</span>`;
+    else statusHtml = `<span class="badge badge-gray">${t('badge_waiting')}</span>`;
+
+    const itemProg = _queueItemProgress[item.url];
+    let progressHtml = '';
+    if (isDownloading && itemProg) {
+      progressHtml = `
+        <div class="progress-wrap mt-8" style="height:4px"><div class="progress-bar" style="width:${itemProg.pct}%"></div></div>
+        <div class="flex-between mt-4 text-xs"><span class="text-muted">${escHtml(itemProg.label || '')}</span><span>${itemProg.pct}%</span></div>
+      `;
+    }
+
+    const html = `
+      <div class="queue-item ${isDownloading ? 'active' : ''} ${isExpanded ? 'expanded' : ''}" data-url="${escHtml(item.url)}">
+        <div class="queue-item-head">
+          <div class="queue-drag" title="Kéo để sắp xếp">⠿</div>
+          ${thumb ? `<img class="queue-thumb" src="${thumb}">` : '<div class="queue-thumb-ph">🎬</div>'}
+          <div class="queue-desc ${!isDownloading ? 'queue-desc-edit' : ''}" 
+               contenteditable="${!isDownloading}" 
+               spellcheck="false" 
+               data-url="${escHtml(item.url)}">${escHtml(item.desc || item.url)}</div>
+          <div class="card-actions">${statusHtml}</div>
+        </div>
+        <div class="queue-item-body">
+          <div class="flex-between text-xs text-muted mb-4">
+            <span>📅 Ngày thêm: ${dateStr}</span>
+            <button class="btn btn-icon text-red" onclick="removeFromQueue('${escHtml(item.url)}')" style="padding:2px;font-size:14px" title="Xóa khỏi hàng chờ">✕</button>
+          </div>
+          ${progressHtml}
+          <div class="text-xs text-dim break-all mt-4" style="opacity:0.5">${escHtml(item.url)}</div>
+        </div>
+      </div>`;
+
+    const node = document.createElement('div');
+    node.innerHTML = html.trim();
+    const el = node.firstChild;
+
+    // Head click toggles expansion
+    el.querySelector('.queue-item-head').addEventListener('click', (e) => {
+      if (e.target.classList.contains('queue-desc-edit') || e.target.classList.contains('queue-drag')) return;
+      if (_expandedUrls.has(item.url)) _expandedUrls.delete(item.url);
+      else _expandedUrls.add(item.url);
+      el.classList.toggle('expanded');
+    });
+
+    // Handle desc edit
+    const descEl = el.querySelector('.queue-desc-edit');
+    if (descEl) {
+      descEl.addEventListener('click', e => e.stopPropagation());
+      descEl.addEventListener('blur', () => {
+        const newDesc = descEl.innerText.trim();
+        if (newDesc && newDesc !== item.desc) {
+          updateQueueItemDesc(item.url, newDesc);
+        }
+      });
+      descEl.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); descEl.blur(); }
+      });
+    }
+
+    return el;
+}
+
 function renderQueue() {
   const el = document.getElementById('queue-list');
   const cnt = document.getElementById('queue-count');
   _cleanupQueueRuntimeState();
+  
   if (cnt) cnt.textContent = _queue.length;
   if (!el) return;
+  
   if (!_queue.length) {
-    el.innerHTML = '<div class="empty-state">' + t('lbl_queue_empty') + '</div>';
+    el.innerHTML = '<div class="empty-state" data-i18n="lbl_queue_empty">Hàng chờ trống</div>';
     return;
   }
-  el.innerHTML = _queue.map((item, idx) => {
-    const thumb = item.cover ? '/api/proxy_image?url=' + encodeURIComponent(item.cover) : '';
-    const isDownloading = _downloadingUrl && item.url === _downloadingUrl;
-    const isNext = !isDownloading && _downloadingUrl && idx === _queue.findIndex(q => q.url !== _downloadingUrl && _queue.indexOf(q) > _queue.findIndex(q2 => q2.url === _downloadingUrl));
 
-    let statusBadge = '';
-    const state = _queueItemState[item.url] || '';
-    const itemProg = _queueItemProgress[item.url];
-    if (isDownloading) {
-      statusBadge = '<span class="queue-status downloading"><span class="spinner-sm"></span> ' + t('lbl_queue_downloading') + '</span>';
-    } else if (state === 'failed') {
-      statusBadge = '<span class="queue-status failed">' + t('lbl_queue_failed') + '</span>';
-    } else if (_dlRunning && idx === _getNextIndex()) {
-      statusBadge = '<span class="queue-status next">' + t('lbl_queue_next') + '</span>';
-    }
-
-    const progressHtml = (isDownloading || itemProg)
-      ? '<div class="queue-item-progress">' +
-          '<div class="queue-item-progress-head">' + t('lbl_queue_item_progress') + '</div>' +
-          '<div class="queue-item-progress-bar"><div class="queue-item-progress-fill" style="width:' + Math.round(itemProg?.pct || 0) + '%"></div></div>' +
-          '<div class="queue-item-progress-label">' + escHtml(itemProg?.label || '') + '</div>' +
-        '</div>'
-      : '';
-
-    return '<div class="queue-item' + (isDownloading ? ' queue-item-active' : '') + '">' +
-      (thumb ? '<img class="queue-thumb" src="' + thumb + '">' : '<div class="queue-thumb-ph">&#127916;</div>') +
-      '<div style="flex:1;min-width:0">' +
-        (isDownloading
-          ? '<div class="queue-desc">' + escHtml(item.desc || item.url) + '</div>'
-          : '<div class="queue-desc queue-desc-edit" data-url="' + escHtml(item.url) + '" contenteditable="true" spellcheck="false">' + escHtml(item.desc || item.url) + '</div>') +
-        '<div class="queue-meta">' +
-          (item.date ? '<span class="queue-date">' + item.date + '</span>' : '') +
-          statusBadge +
-        '</div>' +
-        progressHtml +
-      '</div>' +
-      // Ẩn nút xóa khi đang tải item đó
-      (!isDownloading
-        ? '<button class="btn btn-sm btn-danger" onclick="removeFromQueue(\'' + escHtml(item.url) + '\')" title="' + escHtml(t('ttl_remove_queue_item')) + '">×</button>'
-        : '<span class="queue-lock" title="' + escHtml(t('ttl_queue_item_locked')) + '">&#128274;</span>'
-      ) +
-    '</div>';
-  }).join('');
-
-  el.querySelectorAll('.queue-desc-edit').forEach(node => {
-    node.addEventListener('click', e => e.stopPropagation());
-    node.addEventListener('keydown', e => {
-      e.stopPropagation();
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        node.blur();
-      }
-    });
-    node.addEventListener('blur', () => {
-      const url = node.dataset.url || '';
-      const text = (node.textContent || '').trim();
-      updateQueueItemDesc(url, text);
-    });
+  el.innerHTML = ''; // Clear
+  _queue.forEach(item => {
+    el.appendChild(_renderQueueItem(item));
   });
 }
 
@@ -137,12 +160,14 @@ function _getNextIndex() {
 async function removeFromQueue(url) {
   if (url === _downloadingUrl) return; // không xóa item đang tải
   await API.post('/api/queue/remove', { url });
+  loadQueue();
 }
 
 async function clearQueue() {
-  if (!confirm(t('confirm_clear_queue'))) return;
+  if (!confirm(t('confirm_clear_queue') || 'Xóa toàn bộ hàng chờ?')) return;
   await API.post('/api/queue/clear', {});
-  toast(t('toast_queue_cleared'), 'info');
+  toast(t('toast_queue_cleared') || 'Đã xóa hàng chờ', 'info');
+  loadQueue();
 }
 
 async function addManualUrl() {
@@ -151,8 +176,8 @@ async function addManualUrl() {
   if (!url) return;
   const res = await API.post('/api/queue/add', [{ url, desc: url, cover: '', date: '' }]);
   input.value = '';
-  if (res?.added > 0) toast(t('toast_added_queue') + ' (' + res.added + ')', 'success');
-  else toast(t('toast_url_exists'), 'warning');
+  if (res?.added > 0) toast(t('toast_added_queue') || 'Đã thêm vào hàng chờ', 'success');
+  else toast(t('toast_url_exists') || 'URL đã tồn tại', 'warning');
   loadQueue();
 }
 
@@ -244,7 +269,7 @@ function _runSingleQueueItem(item, index, total) {
 }
 
 async function _runQueueViaProcessApi() {
-  if (!_queue.length) { toast(t('lbl_queue_empty'), 'error'); return; }
+  if (!_queue.length) { toast(t('lbl_queue_empty') || 'Hàng chờ trống', 'error'); return; }
   if (_dlRunning) return;
 
   _dlRunning = true;
