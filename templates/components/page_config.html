@@ -149,14 +149,88 @@
                     <label data-i18n="lbl_font_size">Cỡ chữ phụ đề</label>
                     <input type="number" id="vp-font-size" min="10" max="72" value="32">
                   </div>
-                  <div class="field" style="display:flex;align-items:center;gap:8px;padding-top:20px">
+                  <div class="field" style="display:flex;align-items:center;gap:8px;padding-top:10px">
                     <label class="check-item">
                       <input type="checkbox" id="vp-blur-original" checked>
                       <span data-i18n="lbl_blur_original">Che phụ đề gốc</span>
                     </label>
                   </div>
+                  <div class="field">
+                    <label data-i18n="lbl_blur_zone">Vùng làm mờ</label>
+                    <select id="vp-blur-zone">
+                      <option value="bottom" selected data-i18n="opt_blur_bottom">Dưới</option>
+                      <option value="top" data-i18n="opt_blur_top">Trên</option>
+                      <option value="none" data-i18n="opt_blur_none">Không</option>
+                    </select>
                   </div>
                 </div>
+                <div class="grid-2 mt-8">
+                  <div class="field">
+                    <label data-i18n="lbl_tts_engine">TTS Engine</label>
+                    <select id="vp-tts-engine">
+                      <option value="fpt-ai" selected>FPT AI TTS</option>
+                      <option value="edge-tts">Edge TTS (Microsoft)</option>
+                      <option value="minimax">MiniMax TTS</option>
+                      <option value="gtts">gTTS (Google)</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label data-i18n="lbl_bg_volume">Âm lượng nền</label>
+                    <input type="number" id="vp-bg-volume" min="0" max="1" step="0.1" value="0.1">
+                  </div>
+                </div>
+                <div class="grid-2 mt-8">
+                  <div class="field">
+                    <label data-i18n="lbl_tts_pitch">Cao độ</label>
+                    <input type="text" id="vp-tts-pitch" placeholder="+0Hz" value="+0Hz">
+                  </div>
+                  <div class="field">
+                    <label data-i18n="lbl_tts_rate">Tốc độ</label>
+                    <input type="text" id="vp-tts-rate" placeholder="+0%" value="+0%">
+                  </div>
+                </div>
+                <div class="grid-2 mt-8">
+                  <div class="field">
+                    <label data-i18n="lbl_tts_emotion">Cảm xúc</label>
+                    <select id="vp-tts-emotion">
+                      <option value="default" selected>Mặc định</option>
+                      <option value="cheerful">Vui vẻ</option>
+                      <option value="sad">Buồn</option>
+                      <option value="angry">Giận dữ</option>
+                      <option value="excited">Hào hứng</option>
+                      <option value="friendly">Thân thiện</option>
+                    </select>
+                  </div>
+                  <div class="field" style="display:flex;align-items:flex-end">
+                    <button class="btn btn-secondary btn-sm" type="button" onclick="previewConfigVoice()">Nghe thử</button>
+                    <audio id="vp-preview-audio" controls style="display:none;margin-left:10px;height:32px"></audio>
+                  </div>
+                </div>
+                </div>
+                
+                <hr class="divider">
+                <div class="section-title">🛡 Lách bản quyền (Anti-Fingerprint)</div>
+                <div class="check-grid mb-12">
+                  <label class="check-item"><input type="checkbox" id="vp-afp-enabled"><span>Kích hoạt lách</span></label>
+                  <label class="check-item"><input type="checkbox" id="vp-afp-flip"><span>Lật ngang</span></label>
+                  <label class="check-item"><input type="checkbox" id="vp-afp-vignette"><span>Vignette</span></label>
+                  <label class="check-item"><input type="checkbox" id="vp-afp-vertical"><span>Video dọc</span></label>
+                </div>
+                <div class="grid-2 mt-8">
+                  <div class="field">
+                    <label>Scale Chiều rộng (px)</label>
+                    <input type="number" id="vp-afp-scale-w" value="0">
+                  </div>
+                  <div class="field">
+                    <label>Scale Chiều cao (px)</label>
+                    <input type="number" id="vp-afp-scale-h" value="0">
+                  </div>
+                </div>
+                <div class="field mt-8">
+                  <label>Đường dẫn Overlay Image</label>
+                  <input type="text" id="vp-afp-overlay-img" placeholder="temp_uploads/...">
+                </div>
+
                 <div class="alert-info" style="margin-top:8px">
                   <span data-i18n="lbl_vp_note">Can: pip install openai-whisper edge-tts. Video se duoc xu ly ngay sau khi tai xong.</span>
                 </div>

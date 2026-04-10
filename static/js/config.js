@@ -59,7 +59,7 @@ async function loadConfig() {
   set('vp-model', cfg.video_process?.model || 'base');
   set('vp-lang', cfg.video_process?.language || 'zh');
   setChk('vp-burn', cfg.video_process?.burn_subs !== false);
-  setChk('vp-blur', cfg.video_process?.blur_original === true);
+  setChk('vp-blur-original', cfg.video_process?.blur_original === true);
   setChk('vp-translate', cfg.video_process?.translate !== false);
   setChk('vp-burn-vi', cfg.video_process?.burn_vi_subs !== false);
   setChk('vp-voice', cfg.video_process?.voice_convert !== false);
@@ -67,6 +67,26 @@ async function loadConfig() {
   set('vp-blur-zone', cfg.video_process?.blur_zone || 'bottom');
   set('vp-tts-voice', cfg.video_process?.tts_voice || 'vi-VN-HoaiMyNeural');
   set('vp-font-size', cfg.video_process?.font_size ?? 22);
+  set('vp-tts-engine', cfg.video_process?.tts_engine || 'edge-tts');
+  set('vp-bg-volume', cfg.video_process?.bg_volume ?? 0.15);
+  set('vp-tts-pitch', cfg.video_process?.tts_pitch || '+0Hz');
+  set('vp-tts-rate', cfg.video_process?.tts_rate || '+0%');
+  set('vp-tts-emotion', cfg.video_process?.tts_emotion || 'default');
+  
+  const afp = cfg.video_process?.anti_fingerprint || {};
+  setChk('vp-afp-enabled', afp.enabled === true);
+  setChk('vp-afp-flip', afp.flip_h === true);
+  setChk('vp-afp-vignette', afp.vignette === true);
+  setChk('vp-afp-vertical', afp.vertical === true);
+  set('vp-afp-scale-w', afp.scale_w || 0);
+  set('vp-afp-scale-h', afp.scale_h || 0);
+  set('vp-afp-overlay-img', afp.overlay_image || '');
+  set('vp-afp-brightness', afp.brightness || 0.02);
+  set('vp-afp-contrast', afp.contrast || 1.03);
+  
+  if (typeof syncProcessConfigFromLoaded === 'function') {
+    syncProcessConfigFromLoaded();
+  }
 }
 
 async function saveConfig() {
@@ -124,7 +144,7 @@ async function saveConfig() {
       model: get('vp-model'),
       language: get('vp-lang'),
       burn_subs: getChk('vp-burn'),
-      blur_original: getChk('vp-blur'),
+      blur_original: getChk('vp-blur-original'),
       translate: getChk('vp-translate'),
       burn_vi_subs: getChk('vp-burn-vi'),
       voice_convert: getChk('vp-voice'),
@@ -133,7 +153,23 @@ async function saveConfig() {
       blur_zone: get('vp-blur-zone'),
       tts_voice: get('vp-tts-voice'),
       font_size: parseInt(get('vp-font-size')) || 22,
+      tts_engine: get('vp-tts-engine') || 'edge-tts',
+      bg_volume: parseFloat(get('vp-bg-volume')) || 0.15,
+      tts_pitch: get('vp-tts-pitch') || '+0Hz',
+      tts_rate: get('vp-tts-rate') || '+0%',
+      tts_emotion: get('vp-tts-emotion') || 'default',
       subtitle_format: 'ass',
+      anti_fingerprint: {
+        enabled: getChk('vp-afp-enabled'),
+        flip_h: getChk('vp-afp-flip'),
+        vignette: getChk('vp-afp-vignette'),
+        vertical: getChk('vp-afp-vertical'),
+        scale_w: parseInt(get('vp-afp-scale-w')) || 0,
+        scale_h: parseInt(get('vp-afp-scale-h')) || 0,
+        overlay_image: get('vp-afp-overlay-img') || '',
+        brightness: parseFloat(get('vp-afp-brightness')) || 0.02,
+        contrast: parseFloat(get('vp-afp-contrast')) || 1.03,
+      }
     }
   };
 

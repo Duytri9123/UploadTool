@@ -119,6 +119,20 @@ def _fmt_hms(seconds: float) -> str:
     return f"{int(h):02d}:{int(m):02d}:{s:05.2f}"
 
 
+def extract_audio_only(video_path: Path, output_path: Path, ffmpeg: str) -> tuple[bool, str]:
+    """Extract full audio track from video as MP3."""
+    video_path = Path(video_path)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    cmd = [
+        ffmpeg, "-i", str(video_path),
+        "-vn", "-c:a", "libmp3lame", "-b:a", "192k",
+        str(output_path), "-y", "-loglevel", "error"
+    ]
+    return run_ffmpeg(cmd, "extract audio")
+
+
 def has_audio_track(video_path: Path, ffmpeg: str) -> bool:
     """Check if video has at least one audio stream."""
     try:
@@ -136,6 +150,181 @@ def has_audio_track(video_path: Path, ffmpeg: str) -> bool:
         return "Audio:" in stderr
     except Exception:
         return False
+
+
+def apply_audio_effects(
+    input_path: Path,
+    output_path: Path,
+    ffmpeg: str,
+    pitch_semitones: float = 0.0,
+    speed: float = 1.0,
+    bass: int = 0,
+    mid: int = 0,
+    treble: int = 0,
+    compression: str = "none",  # none, light, heavy
+    reverb: int = 0,            # 0-100
+) -> tuple[bool, str]:
+    """Apply professional voice effects using FFmpeg audio filters."""
+    filters = []
+    
+    # 1. Pitch & Speed
+    # Semi-tones to rate multiplier: 2^(n/12)
+    rate_mult = 2.0 ** (float(pitch_semitones) / 12.0)
+    current_speed = float(speed)
+    
+    # We use asetrate to change pitch, which also changes speed. 
+    # Then we use atempo to fix the speed.
+    # Base sample rate 44100
+    if abs(pitch_semitones) > 0.01:
+        target_rate = int(44100 * rate_mult)
+        filters.append(f"asetrate={target_rate}")
+        # Adjust atempo to return to original duration, then apply manual speed
+        # effective_tempo = speed / rate_mult
+        tempo = current_speed / rate_mult
+        # atempo filter has limit 0.5 to 2.0. We may need to chain them if outside.
+        while tempo > 2.0:
+            filters.append("atempo=2.0")
+            tempo /= 2.0
+        while tempo < 0.5:
+            filters.append("atempo=0.5")
+            tempo /= 0.5
+        filters.append(f"atempo={tempo:.4f}")
+    elif abs(current_speed - 1.0) > 0.01:
+        tempo = current_speed
+        while tempo > 2.0:
+            filters.append("atempo=2.0")
+            tempo /= 2.0
+        while tempo < 0.5:
+            filters.append("atempo=0.5")
+            tempo /= 0.5
+        filters.append(f"atempo={tempo:.4f}")
+
+    # 2. EQ (Equalizer)
+    if bass != 0:
+        filters.append(f"equalizer=f=100:t=q:w=1:g={bass}")
+    if mid != 0:
+        filters.append(f"equalizer=f=1000:t=q:w=1:g={mid}")
+    if treble != 0:
+        filters.append(f"equalizer=f=5000:t=q:w=1:g={treble}")
+
+    # 3. Compression
+    if compression == "light":
+        filters.append("acompressor=threshold=-20dB:ratio=3:attack=5:release=50")
+    elif compression == "heavy":
+        filters.append("acompressor=threshold=-30dB:ratio=5:attack=5:release=50")
+
+    # 4. Reverb (Simple echo for "large room" feel)
+    if reverb > 0:
+        # volume of echo (0 to 1)
+        rv_vol = min(0.3, float(reverb) / 100.0 * 0.5)
+        filters.append(f"aecho=0.8:0.88:40:{rv_vol}")
+
+    if not filters:
+        shutil.copy2(str(input_path), str(output_path))
+        return True, ""
+
+    filter_str = ",".join(filters)
+    ok, err = run_ffmpeg([
+        ffmpeg, "-i", str(input_path),
+        "-af", filter_str,
+        "-c:a", "libmp3lame", "-b:a", "128k",
+        str(output_path), "-y", "-loglevel", "error"
+    ])
+    return ok, err
+
+
+def apply_anti_fingerprint(
+    video_path: Path,
+    output_path: Path,
+    ffmpeg: str,
+    enabled: bool = False,
+    flip_h: bool = False,
+    scale_w: int = 0,
+    scale_h: int = 0,
+    brightness: float = 0.0,
+    contrast: float = 1.0,
+    vignette: bool = False,
+    overlay_image: str = "",
+    overlay_opacity: float = 0.05,
+    vertical: bool = False,
+    speed: float = 1.0,
+) -> tuple[bool, str]:
+    """Apply multiple video filters to bypass platform detection (anti-reup)."""
+    if not enabled:
+        shutil.copy2(str(video_path), str(output_path))
+        return True, ""
+
+    video_filters = []
+    
+    # 1. Scaling & Padding (Vertical 9:16)
+    if vertical:
+        # Standard phone ratio 9:16 (e.g. 1080x1920)
+        video_filters.append("scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2")
+    elif scale_w > 0 or scale_h > 0:
+        sw = scale_w if scale_w > 0 else -1
+        sh = scale_h if scale_h > 0 else -1
+        video_filters.append(f"scale={sw}:{sh}")
+
+    # 2. Horizontal Flip
+    if flip_h:
+        video_filters.append("hflip")
+
+    # 3. Visual Adjustments
+    if abs(brightness) > 0.001 or abs(contrast - 1.0) > 0.001:
+        video_filters.append(f"eq=brightness={brightness}:contrast={contrast}")
+    
+    if vignette:
+        video_filters.append("vignette")
+
+    # 4. Speed
+    if abs(float(speed) - 1.0) > 0.01:
+        video_filters.append(f"setpts=PTS/{speed}")
+
+    v_filter_str = ",".join(video_filters)
+    
+    # 5. Overlay Handling
+    input_args = ["-i", str(video_path)]
+    filter_complex = ""
+    
+    if overlay_image and Path(overlay_image).exists():
+        input_args += ["-i", str(overlay_image)]
+        ov_op = max(0.01, min(0.5, float(overlay_opacity)))
+        # Scale overlay to video size, set opacity, then overlay
+        filter_complex = (
+            f"[0:v]{v_filter_str or 'null'}[vorig];"
+            f"[1:v]scale=iw:ih,format=rgba,colorchannelmixer=aa={ov_op}[ovlp];"
+            f"[vorig][ovlp]overlay=0:0"
+        )
+    else:
+        if v_filter_str:
+            filter_complex = v_filter_str
+        else:
+            filter_complex = "null"
+
+    cmd = [ffmpeg] + input_args + [
+        "-filter_complex" if "[ovlp]" in filter_complex else "-vf", filter_complex,
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "22"
+    ]
+    
+    # Audio speed if video speed changed
+    if abs(float(speed) - 1.0) > 0.01:
+        # Combine atempo filters if needed
+        atempo = speed
+        af = []
+        while atempo > 2.0:
+            af.append("atempo=2.0")
+            atempo /= 2.0
+        while atempo < 0.5:
+            af.append("atempo=0.5")
+            atempo /= 0.5
+        af.append(f"atempo={atempo:.4f}")
+        cmd += ["-af", ",".join(af), "-c:a", "aac"]
+    else:
+        cmd += ["-c:a", "copy"]
+
+    cmd += [str(output_path), "-y", "-loglevel", "error"]
+    
+    return run_ffmpeg(cmd, "anti-fingerprint")
 
 
 # ── SRT helpers ───────────────────────────────────────────────────────────────
@@ -218,6 +407,45 @@ def _parse_srt(srt_path: Path) -> list[dict]:
         except Exception:
             continue
     return segments
+
+
+def _parse_ass_file(ass_path: Path) -> list[dict]:
+    """
+    Parse an ASS subtitle file → list of {start, end, text}.
+    Prefers Layer 1 (translated VI) lines; falls back to Layer 0.
+    """
+    ass_path = Path(ass_path)
+    content = ass_path.read_text(encoding="utf-8", errors="replace")
+
+    def _t(t: str) -> float:
+        try:
+            h, m, rest = t.strip().split(":")
+            s, cs = rest.split(".")
+            return int(h) * 3600 + int(m) * 60 + int(s) + int(cs) / 100.0
+        except Exception:
+            return 0.0
+
+    all_lines: list[dict] = []
+    for line in content.splitlines():
+        if not line.startswith("Dialogue:"):
+            continue
+        parts = line[len("Dialogue:"):].strip().split(",", 9)
+        if len(parts) < 10:
+            continue
+        try:
+            layer = int(parts[0].strip())
+            start = _t(parts[1])
+            end   = _t(parts[2])
+            text  = parts[9]
+            text  = re.sub(r"\{[^}]*\}", "", text)
+            text  = text.replace("\\N", " ").replace("\\n", " ").strip()
+            if text:
+                all_lines.append({"layer": layer, "start": start, "end": end, "text": text})
+        except Exception:
+            continue
+
+    vi_lines = [l for l in all_lines if l["layer"] > 0]
+    return sorted(vi_lines if vi_lines else all_lines, key=lambda s: s["start"])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -689,11 +917,17 @@ class MultiProviderTTS:
         engine: str = "edge-tts",
         fpt_api_key: str = "",
         fpt_speed: int = 0,
+        pitch: str = "+0Hz",
+        rate: str = "+0%",
+        style: str = "default",
     ):
         self.voice = voice
         self.engine = engine
         self.fpt_api_key = (fpt_api_key or "").strip()
         self.fpt_speed = int(fpt_speed)
+        self.pitch = pitch
+        self.rate = rate
+        self.style = style
 
     async def generate(self, text: str, out_path: Path) -> bool:
         """
@@ -712,9 +946,17 @@ class MultiProviderTTS:
             except Exception:
                 pass
 
+        if str(self.engine).strip().lower() == "minimax":
+            try:
+                ok = await _tts_minimax(text, self.voice, out_path)
+                if ok:
+                    return True
+            except Exception:
+                pass
+
         # Try Edge-TTS first
         try:
-            ok = await _tts_edge(text, self.voice, out_path)
+            ok = await _tts_edge(text, self.voice, out_path, rate=self.rate, pitch=self.pitch, style=self.style)
             if ok:
                 return True
         except Exception:
@@ -740,6 +982,10 @@ class MultiProviderTTS:
         tts_speed: float = 1.0,
         auto_speed: bool = True,
         ffmpeg: str = "ffmpeg",
+        pitch: str = "+0Hz",
+        rate: str = "+0%",
+        fx_enabled: bool = False,
+        fx_params: dict = None,
     ) -> list[dict]:
         """
         Generate TTS for all segments with bounded concurrency.
@@ -748,6 +994,7 @@ class MultiProviderTTS:
         """
         tmpdir = Path(tmpdir)
         sem = asyncio.Semaphore(max(1, int(max_concurrency)))
+        fx = (fx_params or {}) if fx_enabled else {}
 
         async def _gen_one(i: int, seg: dict, text: str):
             if not text or not text.strip():
@@ -757,20 +1004,34 @@ class MultiProviderTTS:
                 for _attempt in range(max(1, int(retries) + 1)):
                     ok = await self.generate(text.strip(), out_path)
                     if ok:
-                        # Auto-speed: fit TTS duration to segment duration
+                        # 1. Calculate base speed for fitting duration
                         speed = float(tts_speed) if tts_speed else 1.0
                         if auto_speed:
                             seg_dur = float(seg["end"]) - float(seg["start"])
                             tts_dur = _get_audio_duration(ffmpeg, out_path)
                             if tts_dur > 0 and seg_dur > 0:
                                 auto = tts_dur / seg_dur
-                                auto = max(0.5, min(3.0, auto))
-                                speed = max(0.5, min(3.0, auto * speed))
-                        if abs(speed - 1.0) > 0.05:
-                            sped_path = tmpdir / f"tts_{i:04d}_fast.mp3"
-                            _apply_atempo(ffmpeg, out_path, sped_path, speed)
-                            if sped_path.exists() and sped_path.stat().st_size > 0:
-                                out_path = sped_path
+                                auto = max(0.4, min(4.0, auto)) # wider range
+                                speed = max(0.4, min(4.0, auto * speed))
+                        
+                        # 2. Apply FX or atempo
+                        processed_path = tmpdir / f"tts_{i:04d}_proc.mp3"
+                        if fx_enabled or abs(speed - 1.0) > 0.01:
+                            fx_ok, fx_err = apply_audio_effects(
+                                input_path=out_path,
+                                output_path=processed_path,
+                                ffmpeg=ffmpeg,
+                                pitch_semitones=float(fx.get("pitch", 0)) if fx_enabled else 0.0,
+                                speed=speed * (float(fx.get("speed", 1.0)) if fx_enabled else 1.0),
+                                bass=int(fx.get("bass", 0)) if fx_enabled else 0,
+                                mid=int(fx.get("mid", 0)) if fx_enabled else 0,
+                                treble=int(fx.get("treble", 0)) if fx_enabled else 0,
+                                compression=str(fx.get("compression", "none")) if fx_enabled else "none",
+                                reverb=int(fx.get("reverb", 0)) if fx_enabled else 0,
+                            )
+                            if fx_ok and processed_path.exists():
+                                out_path = processed_path
+                        
                         return {"path": out_path, "start": seg["start"], "end": seg["end"]}
                     await asyncio.sleep(0.25 * (_attempt + 1))
             return None
@@ -825,15 +1086,88 @@ def _apply_atempo(ffmpeg: str, src: Path, dst: Path, speed: float) -> bool:
     return ok
 
 
-async def _tts_edge(text: str, voice: str, out_path: Path, rate: str = "+0%") -> bool:
-    """Generate TTS audio using edge-tts."""
+async def _tts_edge(text: str, voice: str, out_path: Path, rate: str = "+0%", pitch: str = "+0Hz", style: str = "default") -> bool:
+    """Generate TTS audio using edge-tts. Supports optional pitch/rate/style."""
     try:
         import edge_tts
-        communicate = edge_tts.Communicate(text, voice, rate=rate)
+        communicate = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
         await communicate.save(str(out_path))
         return out_path.exists() and out_path.stat().st_size > 0
     except Exception as e:
         raise RuntimeError(f"edge-tts failed: {e}")
+
+
+MINIMAX_API_KEY = "sk-api-8ZUGVew8wYVt_HD95HH7MwqQ9z22ehUcFl83O-sKgOuRein6oQW8_hKOKnIxiuf53eVo8HluRApGZBhQezinf6SHJsiErFCYLUPf1pMCNoRAqdwWxBDCtx0"
+MINIMAX_TTS_URL = "https://api.minimax.io/v1/t2a_v2"
+MINIMAX_TTS_MODEL = "speech-2.8-hd"
+
+# Popular Vietnamese-friendly voices on MiniMax
+MINIMAX_VOICES = {
+    "Calm_Woman":        "Calm_Woman",
+    "Gentle_Woman":      "Gentle_Woman",
+    "Lively_Girl":       "Lively_Girl",
+    "Deep_Voice_Man":    "Deep_Voice_Man",
+    "Confident_Man":     "Confident_Man",
+    "Friendly_Person":   "Friendly_Person",
+    "Energetic_Male":    "Energetic_Male",
+    "Soft_Female":       "Soft_Female",
+}
+
+
+async def _tts_minimax(
+    text: str,
+    voice: str,
+    out_path: Path,
+    api_key: str = "",
+    speed: float = 1.0,
+    pitch: float = 0.0,
+    volume: float = 1.0,
+) -> bool:
+    """Generate TTS audio using MiniMax T2A v2 API."""
+    import aiohttp, base64
+    key = (api_key or MINIMAX_API_KEY).strip()
+    payload = {
+        "model": MINIMAX_TTS_MODEL,
+        "text": text,
+        "stream": False,
+        "voice_setting": {
+            "voice_id": voice or "Calm_Woman",
+            "speed": float(speed),
+            "pitch": int(pitch),
+            "vol": float(volume),
+        },
+        "audio_setting": {
+            "format": "mp3",
+            "sample_rate": 32000,
+            "bitrate": 128000,
+            "channel": 1,
+        },
+    }
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+    timeout = aiohttp.ClientTimeout(total=60)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.post(MINIMAX_TTS_URL, json=payload, headers=headers) as resp:
+            if resp.status != 200:
+                body = await resp.text()
+                raise RuntimeError(f"MiniMax TTS failed: status={resp.status}, body={body}")
+            data = await resp.json(content_type=None)
+            # Response: {"data": {"audio": "<hex or base64>"}, "base_resp": {...}}
+            audio_data = None
+            if isinstance(data.get("data"), dict):
+                raw = data["data"].get("audio") or data["data"].get("audio_file") or ""
+                if raw:
+                    # MiniMax returns hex-encoded audio
+                    try:
+                        audio_data = bytes.fromhex(raw)
+                    except ValueError:
+                        audio_data = base64.b64decode(raw)
+            if not audio_data:
+                raise RuntimeError(f"MiniMax TTS: no audio in response: {data}")
+            out_path.write_bytes(audio_data)
+            return out_path.exists() and out_path.stat().st_size > 0
 
 
 async def _tts_fpt_ai(
@@ -918,6 +1252,9 @@ async def convert_voice(
     bg_volume: float = 0.15,        # background original audio volume
     tts_speed: float = 1.0,         # manual speed multiplier (1.0 = auto-fit)
     auto_speed: bool = True,        # auto-fit TTS duration to segment duration
+    tts_pitch: str = "+0Hz",
+    tts_rate: str = "+0%",
+    tts_emotion: str = "default",
 ) -> tuple[bool, str]:
     """
     Replace original audio with Vietnamese TTS voice.
@@ -961,7 +1298,7 @@ async def convert_voice(
             clip_path = tmpdir / f"tts_{i:04d}.mp3"
             try:
                 if tts_engine == "edge-tts":
-                    ok = await _tts_edge(vi_text.strip(), tts_voice, clip_path)
+                    ok = await _tts_edge(vi_text.strip(), tts_voice, clip_path, rate=tts_rate, pitch=tts_pitch, style=tts_emotion)
                 else:
                     ok = _tts_gtts(vi_text.strip(), "vi", clip_path)
                 if ok:
@@ -1457,6 +1794,8 @@ def process_video_full(data: dict) -> Generator[str, None, None]:
                         or FPT_TTS_DEFAULT_KEY
                     ),
                     fpt_speed=_as_int(data.get("fpt_speed", 0), 0),
+                    pitch=str(data.get("tts_pitch") or "+0Hz"),
+                    rate=str(data.get("tts_rate") or "+0%"),
                 )
                 tts_clips = asyncio.run(
                     tts.generate_all(
@@ -1466,8 +1805,20 @@ def process_video_full(data: dict) -> Generator[str, None, None]:
                         max_concurrency=_as_int(data.get("tts_concurrency", 2), 2),
                         retries=_as_int(data.get("tts_retries", 2), 2),
                         tts_speed=_as_float(data.get("tts_speed", 1.0), 1.0),
+                        pitch=str(data.get("tts_pitch") or "+0Hz"),
+                        rate=str(data.get("tts_rate") or "+0%"),
                         auto_speed=_as_bool(data.get("auto_speed", True), True),
                         ffmpeg=ffmpeg,
+                        fx_enabled=_as_bool(data.get("fx_enabled", False), False),
+                        fx_params={
+                            "pitch": data.get("fx_pitch", 1.5),
+                            "speed": data.get("fx_speed", 1.08),
+                            "bass": data.get("fx_bass", -2),
+                            "mid": data.get("fx_mid", 2),
+                            "treble": data.get("fx_treble", 3),
+                            "compression": data.get("fx_comp", "light"),
+                            "reverb": data.get("fx_reverb", 5),
+                        }
                     )
                 )
                 yield send(
@@ -1512,6 +1863,35 @@ def process_video_full(data: dict) -> Generator[str, None, None]:
                 yield send(log=f"[Bước 4/4] ✗ Tạo giọng thất bại: {err}", level="error")
         except Exception as e:
             yield send(log=f"[Bước 4/4] ✗ Lỗi tạo giọng: {e}", level="error")
+
+    # ── Step 5: Anti-Fingerprint (Lách bản quyền) ──────────────────────────
+    do_afp = _as_bool(data.get("afp_enabled", False), False)
+    if do_afp and final_output_path:
+        afp_path = out_dir / f"{stem}_anti_reup.mp4"
+        yield send(log="[Bước 5/5] Đang áp dụng hiệu ứng lách bản quyền...", level="info")
+        yield send(overall=99, overall_lbl="Đang lách bản quyền...")
+        
+        ok, err = apply_anti_fingerprint(
+            video_path=final_output_path,
+            output_path=afp_path,
+            ffmpeg=ffmpeg,
+            enabled=True,
+            flip_h=_as_bool(data.get("afp_flip", False), False),
+            scale_w=_as_int(data.get("afp_scale_w", 0), 0),
+            scale_h=_as_int(data.get("afp_scale_h", 0), 0),
+            brightness=_as_float(data.get("afp_brightness", 0.02), 0.02),
+            contrast=_as_float(data.get("afp_contrast", 1.03), 1.03),
+            vignette=_as_bool(data.get("afp_vignette", False), False),
+            overlay_image=str(data.get("afp_overlay_img") or "").strip(),
+            overlay_opacity=_as_float(data.get("afp_overlay_op", 0.05), 0.05),
+            vertical=_as_bool(data.get("afp_vertical", False), False),
+            speed=_as_float(data.get("afp_speed", 1.0), 1.0),
+        )
+        if ok:
+            yield send(log=f"[Bước 5/5] ✓ Hoàn tất lách bản quyền: {afp_path.name}", level="success")
+            final_output_path = afp_path
+        else:
+            yield send(log=f"[Bước 5/5] ✗ Lách bản quyền thất bại: {err}", level="error")
 
     if not final_output_path:
         final_output_path = video_path.resolve()

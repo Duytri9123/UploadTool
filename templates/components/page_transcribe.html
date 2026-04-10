@@ -50,19 +50,38 @@
                     <select id="tr-tts-engine">
                       <option value="fpt-ai" selected>FPT AI TTS</option>
                       <option value="edge-tts">Edge TTS (Microsoft)</option>
+                      <option value="minimax">MiniMax TTS</option>
                       <option value="gtts">gTTS (Google)</option>
                     </select>
                   </div>
-                  <div class="field">
-                    <label>Giọng đọc</label>
-                    <select id="tr-tts-voice">
-                      <option value="banmai" selected>Ban Mai (FPT)</option>
-                      <option value="thuminh">Thu Minh (FPT)</option>
-                      <option value="myan">Mỹ An (FPT)</option>
-                      <option value="leminh">Lê Minh (FPT)</option>
-                    </select>
+                    <div class="field">
+                      <label>Giọng đọc</label>
+                      <select id="tr-tts-voice"></select>
+                    </div>
                   </div>
-                </div>
+                  <div class="grid-2 mt-8">
+                    <div class="field">
+                      <label data-i18n="lbl_tts_pitch">Cao độ</label>
+                      <input type="text" id="tr-tts-pitch" placeholder="+0Hz" value="+0Hz">
+                    </div>
+                    <div class="field">
+                      <label data-i18n="lbl_tts_rate">Tốc độ</label>
+                      <input type="text" id="tr-tts-rate" placeholder="+0%" value="+0%">
+                    </div>
+                  </div>
+                  <div class="grid-2 mt-8">
+                    <div class="field">
+                      <label data-i18n="lbl_tts_emotion">Cảm xúc</label>
+                      <select id="tr-tts-emotion">
+                        <option value="default" selected>Mặc định</option>
+                        <option value="cheerful">Vui vẻ</option>
+                        <option value="sad">Buồn</option>
+                        <option value="angry">Giận dữ</option>
+                        <option value="excited">Hào hứng</option>
+                        <option value="friendly">Thân thiện</option>
+                      </select>
+                    </div>
+                  </div>
                 <div class="field">
                   <label>Nhập text để nghe thử</label>
                   <textarea id="tr-preview-text" rows="3" placeholder="Nhập một câu tiếng Việt để nghe thử giọng đọc"></textarea>
@@ -72,8 +91,66 @@
                   <audio id="tr-preview-audio" controls style="display:none;max-width:320px"></audio>
                 </div>
               </div>
-              <div class="btn-group mt-12">
+              <div class="btn-group mt-12" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
                 <button class="btn btn-primary" id="btn-tr" onclick="startTranscribe()" data-i18n="btn_start_tr">Bắt đầu phiên âm</button>
+                <button class="btn btn-secondary" onclick="extractAudioOnly()" title="Tách riêng âm thanh từ video đã chọn">Tách MP3</button>
+              </div>
+              <div class="btn-group mt-8">
+                <button class="btn btn-secondary" style="width:100%" onclick="generateTtsFromAss()" title="Tạo voice MP3 từ nội dung file .ass">Tạo MP3 từ file .ass</button>
+              </div>
+            </div>
+
+            <div class="card card-collapsible collapsed card-has-body mt-12">
+              <div class="card-header">
+                <span class="card-title">🎙 Chỉnh giọng Review chuyên nghiệp</span>
+                <div class="card-actions">
+                  <label class="toggle-wrap">
+                    <input type="checkbox" class="toggle-input" id="tr-fx-enabled">
+                    <div class="toggle"></div>
+                    <span class="toggle-label text-sm">Bật hiệu ứng</span>
+                  </label>
+                </div>
+              </div>
+              <div class="card-body">
+                <div class="grid-2">
+                  <div class="field">
+                    <label>Pitch (Bán âm)</label>
+                    <input type="number" id="tr-fx-pitch" step="0.1" value="1.5">
+                  </div>
+                  <div class="field">
+                    <label>Speed (Tốc độ)</label>
+                    <input type="number" id="tr-fx-speed" step="0.01" value="1.08">
+                  </div>
+                </div>
+                <div class="section-title mt-8">Equalizer (EQ)</div>
+                <div class="grid-3">
+                  <div class="field">
+                    <label>Bass (dB)</label>
+                    <input type="number" id="tr-fx-bass" step="1" value="-2">
+                  </div>
+                  <div class="field">
+                    <label>Mid (dB)</label>
+                    <input type="number" id="tr-fx-mid" step="1" value="2">
+                  </div>
+                  <div class="field">
+                    <label>Treble (dB)</label>
+                    <input type="number" id="tr-fx-treble" step="1" value="3">
+                  </div>
+                </div>
+                <div class="grid-2 mt-8">
+                  <div class="field">
+                    <label>Nén (Compression)</label>
+                    <select id="tr-fx-comp">
+                      <option value="none">Tắt</option>
+                      <option value="light" selected>Nhẹ (Reviewer)</option>
+                      <option value="heavy">Mạnh</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label>Vang (Reverb)</label>
+                    <input type="number" id="tr-fx-reverb" min="0" max="100" value="5" placeholder="%">
+                  </div>
+                </div>
               </div>
             </div>
           </div>
