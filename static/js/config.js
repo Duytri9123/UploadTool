@@ -72,6 +72,15 @@ async function loadConfig() {
   set('vp-tts-pitch', cfg.video_process?.tts_pitch || '+0Hz');
   set('vp-tts-rate', cfg.video_process?.tts_rate || '+0%');
   set('vp-tts-emotion', cfg.video_process?.tts_emotion || 'default');
+
+  const hfCfg = cfg.huggingface || {};
+  set('vp-hf-model', hfCfg.tts_model || 'facebook/mms-tts-vie');
+  set('vp-hf-device', hfCfg.device || 'cpu');
+  set('vp-hf-embeddings', hfCfg.tts_speaker_embeddings || '');
+  if ((cfg.video_process?.tts_engine || 'edge-tts') === 'huggingface') {
+    const el = document.getElementById('vp-hf-config');
+    if (el) el.style.display = 'block';
+  }
   
   const afp = cfg.video_process?.anti_fingerprint || {};
   setChk('vp-afp-enabled', afp.enabled === true);
@@ -138,6 +147,11 @@ async function saveConfig() {
         caption_template: get('cfg-tt-caption-template') || '{title}',
         privacy_status: get('cfg-tt-privacy') || 'private',
       },
+    },
+    huggingface: {
+      tts_model: get('vp-hf-model') || 'facebook/mms-tts-vie',
+      device: get('vp-hf-device') || 'cpu',
+      tts_speaker_embeddings: get('vp-hf-embeddings') || '',
     },
     video_process: {
       enabled: getChk('vp-enabled'),

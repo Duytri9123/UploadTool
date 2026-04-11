@@ -167,16 +167,43 @@
                 <div class="grid-2 mt-8">
                   <div class="field">
                     <label data-i18n="lbl_tts_engine">TTS Engine</label>
-                    <select id="vp-tts-engine">
+                    <select id="vp-tts-engine" onchange="document.getElementById('vp-hf-config').style.display = this.value==='huggingface'?'block':'none'">
                       <option value="fpt-ai" selected>FPT AI TTS</option>
                       <option value="edge-tts">Edge TTS (Microsoft)</option>
                       <option value="minimax">MiniMax TTS</option>
                       <option value="gtts">gTTS (Google)</option>
+                      <option value="huggingface">HuggingFace TTS</option>
                     </select>
                   </div>
                   <div class="field">
                     <label data-i18n="lbl_bg_volume">Âm lượng nền</label>
                     <input type="number" id="vp-bg-volume" min="0" max="1" step="0.1" value="0.1">
+                  </div>
+                </div>
+                <!-- HuggingFace TTS config (ẩn mặc định) -->
+                <div id="vp-hf-config" style="display:none;margin-top:8px">
+                  <div class="grid-2">
+                    <div class="field">
+                      <label>HF Model</label>
+                      <input type="text" id="vp-hf-model" placeholder="facebook/mms-tts-vie" value="facebook/mms-tts-vie">
+                    </div>
+                    <div class="field">
+                      <label>Device</label>
+                      <select id="vp-hf-device">
+                        <option value="cpu" selected>CPU</option>
+                        <option value="cuda">CUDA (GPU)</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="field mt-8">
+                    <label>Speaker Embeddings <span style="color:var(--dim);font-size:11px">(để clone giọng speecht5_tts)</span></label>
+                    <div style="display:flex;gap:4px">
+                      <select id="vp-hf-embeddings" style="flex:1">
+                        <option value="">(Không dùng / Mặc định)</option>
+                      </select>
+                      <button class="btn btn-secondary btn-sm" type="button" onclick="uploadHfVoice()" title="Thêm giọng mới">+</button>
+                      <button class="btn btn-secondary btn-sm" type="button" onclick="refreshHfVoices()" title="Tải lại">↻</button>
+                    </div>
                   </div>
                 </div>
                 <div class="grid-2 mt-8">
