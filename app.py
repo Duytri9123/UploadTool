@@ -1230,6 +1230,26 @@ def tts_preview():
                 elif tts_engine == "minimax":
                     from core.video_processor import _tts_minimax
                     ok = asyncio.run(_tts_minimax(text, tts_voice, out_path))
+                elif tts_engine == "huggingface":
+                    from core.hf_tts import HuggingFaceTTS
+                    cfg = load_cfg()
+                    hf_cfg = cfg.get("huggingface") or {}
+                    tr_cfg = cfg.get("translation") or {}
+                    hf_token = (
+                        str(hf_cfg.get("hf_token") or "").strip()
+                        or str(tr_cfg.get("hf_token") or "").strip()
+                        or os.getenv("HF_TOKEN", "").strip()
+                    )
+                    hf = HuggingFaceTTS(
+                        hf_token=hf_token,
+                        tts_model=str(data.get("hf_model") or hf_cfg.get("tts_model") or "facebook/mms-tts-vie"),
+                        device=str(data.get("hf_device") or hf_cfg.get("device") or "cpu"),
+                        speaker_embeddings_path=str(data.get("hf_embeddings") or hf_cfg.get("tts_speaker_embeddings") or ""),
+                    )
+                    ok_hf, err_hf = hf.synthesize(text, out_path)
+                    if not ok_hf:
+                        return jsonify({"ok": False, "error": err_hf}), 500
+                    ok = ok_hf
                 else:
                     ok = asyncio.run(_tts_edge(text, tts_voice, out_path, rate=tts_rate, pitch=tts_pitch, style=tts_emotion))
             except Exception as inner_e:
@@ -1266,6 +1286,126 @@ def tts_preview():
             return send_file(audio_data, mimetype="audio/mpeg", as_attachment=False, download_name="preview.mp3")
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/hf-tts/models", methods=["GET"])
+def hf_tts_models():
+    """Trả về danh sách các HuggingFace TTS model được hỗ trợ."""
+    models = [
+        {"id": "facebook/mms-tts-vie", "name": "MMS TTS Vietnamese", "language": "vi"},
+        {"id": "facebook/mms-tts-eng", "name": "MMS TTS English", "language": "en"},
+        {"id": "facebook/mms-tts-zho", "name": "MMS TTS Chinese", "language": "zh"},
+        {"id": "microsoft/speecht5_tts", "name": "SpeechT5 TTS (cần speaker embeddings)", "language": "en"},
+    ]
+    return jsonify({"ok": True, "models": models})
+
+
+# ── HF VOICES MANAGEMENT ───────────────────────────────────────────────────
+
+VOICES_DIR = ROOT / "voices"
+VOICES_DIR.mkdir(parents=True, exist_ok=True)
+
+@app.route("/api/hf_voices", methods=["GET"])
+def list_hf_voices():
+    voices = []
+    for f in VOICES_DIR.glob("*"):
+        if f.suffix in (".npy", ".pt"):
+            voices.append({"name": f.name, "path": str(f.absolute())})
+    return jsonify({"ok": True, "voices": voices})
+
+@app.route("/api/hf_voices/upload", methods=["POST"])
+def upload_hf_voice():
+    import tempfile
+    from werkzeug.utils import secure_filename
+    if "audio" not in request.files:
+        return jsonify({"ok": False, "error": "No audio file uploaded"}), 400
+    file = request.files["audio"]
+    name = str(request.form.get("name") or "voice").strip()
+    name = secure_filename(name)
+    if not name: name = "voice"
+    if not name.endswith(".npy"): name += ".npy"
+    
+    out_path = VOICES_DIR / name
+    if out_path.exists():
+        return jsonify({"ok": False, "error": "Tên giọng này đã tồn tại"}), 400
+        
+    try:
+        import numpy as np
+        import torch
+        import torchaudio
+        import os
+        import sys
+        import types
+        # More aggressive mocking for SpeechBrain's lazy-loading of integrations on Windows
+        mock_m = types.ModuleType('mock_m')
+        sys.modules['k2'] = mock_m
+        for sub in ['k2', 'k2_fsa', 'nlp']:
+            sys.modules[f'speechbrain.integrations.{sub}'] = mock_m
+        from speechbrain.inference.speaker import EncoderClassifier
+
+        # Windows workaround for [WinError 1314] when creating symlinks without admin rights
+        if os.name == "nt":
+            import shutil
+            if not hasattr(os, "_orig_symlink_patched"):
+                os._orig_symlink_patched = True
+                _orig_symlink = os.symlink
+                def _force_copy_symlink(src, dst, target_is_directory=False, **kwargs):
+                    try:
+                        _orig_symlink(src, dst, target_is_directory=target_is_directory, **kwargs)
+                    except OSError:
+                        if target_is_directory:
+                            shutil.copytree(src, dst, dirs_exist_ok=True)
+                        else:
+                            shutil.copy2(src, dst)
+                os.symlink = _force_copy_symlink
+
+        with tempfile.NamedTemporaryFile(suffix=".tmp", delete=False) as tmp_in:
+            in_path = tmp_in.name
+            file.save(in_path)
+            
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_out:
+            wav_path = tmp_out.name
+            
+        try:
+            from core.video_processor import find_ffmpeg
+            ffmpeg = find_ffmpeg()
+            import subprocess
+            subprocess.run([ffmpeg, "-y", "-i", in_path, "-ar", "16000", "-ac", "1", wav_path], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            return jsonify({"ok": False, "error": f"Lỗi covert audio bằng ffmpeg: {e}"}), 400
+
+        classifier = EncoderClassifier.from_hparams(source="speechbrain/spkrec-xvect-voxceleb", savedir="tmpdir")
+        signal, fs = torchaudio.load(wav_path, backend="soundfile")
+        if signal.shape[0] > 1:
+            signal = torch.mean(signal, dim=0, keepdim=True)
+            
+        embeddings = classifier.encode_batch(signal)
+        embeddings = embeddings.squeeze(1).detach().cpu().numpy()
+        
+        np.save(str(out_path), embeddings)
+        
+        try: 
+            os.unlink(in_path)
+            os.unlink(wav_path)
+        except: pass
+
+        return jsonify({"ok": True, "name": name, "path": str(out_path.absolute())})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/hf_voices/<name>", methods=["DELETE"])
+def delete_hf_voice(name):
+    from werkzeug.utils import secure_filename
+    safe_name = secure_filename(name)
+    target = VOICES_DIR / safe_name
+    if target.exists() and target.is_file():
+        try:
+            target.unlink()
+            return jsonify({"ok": True})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({"ok": False, "error": "Not found"}), 404
+
+
 
 @app.route("/api/transcribe", methods=["POST"])
 def transcribe():
@@ -1887,6 +2027,38 @@ def _preload_whisper_model():
     except Exception:
         pass
 
+def _preload_hf_tts_model():
+    """Preload HuggingFace TTS model in background if selected, so first preview is fast."""
+    try:
+        from core.hf_tts import HuggingFaceTTS
+        import os
+        cfg = load_cfg()
+        vp_cfg = cfg.get("video_process") or {}
+        tr_cfg = cfg.get("translation") or {}
+        hf_cfg = cfg.get("huggingface") or {}
+        
+        hf_token = (
+            str(hf_cfg.get("hf_token") or "").strip()
+            or str(tr_cfg.get("hf_token") or "").strip()
+            or os.getenv("HF_TOKEN", "").strip()
+        )
+        tts_model = str(hf_cfg.get("tts_model") or "facebook/mms-tts-vie")
+        device = str(hf_cfg.get("device") or "cpu")
+        embeddings = str(hf_cfg.get("tts_speaker_embeddings") or "")
+        
+        # Load the model in background to trigger the download or ram allocation
+        hf = HuggingFaceTTS(
+            hf_token=hf_token,
+            tts_model=tts_model,
+            device=device,
+            speaker_embeddings_path=embeddings
+        )
+        hf._load_model()
+        if hf._is_speecht5():
+            hf._load_speaker_embeddings()
+    except Exception:
+        pass
+
 
 # ── YouTube Upload ─────────────────────────────────────────────────────────
 _youtube_uploader = None
@@ -2211,5 +2383,6 @@ if __name__ == "__main__":
     elif _NGROK_ERROR:
         print(f"[ngrok] Error: {_NGROK_ERROR}")
     threading.Thread(target=_preload_whisper_model, daemon=True).start()
+    threading.Thread(target=_preload_hf_tts_model, daemon=True).start()
     threading.Timer(1.2, lambda: webbrowser.open(f"http://localhost:{APP_PORT}")).start()
     socketio.run(app, host=APP_HOST, port=APP_PORT, debug=False)

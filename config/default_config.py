@@ -89,6 +89,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "bind_tls": True,
         "public_url": "",
     },
+    "huggingface": {
+        "hf_token": "",                       # fallback sang translation.hf_token nếu rỗng
+        "tts_model": "facebook/mms-tts-vie",  # model mặc định (tiếng Việt)
+        "tts_speaker_embeddings": "",         # optional, đường dẫn local
+        "device": "cpu",                      # hoặc "cuda"
+    },
     "video_process": {
         "enabled": True,
         "model": "small",

@@ -254,16 +254,46 @@
                   <div class="grid-2">
                     <div class="field">
                       <label data-i18n="lbl_tts_engine">TTS Engine</label>
-                      <select id="proc-tts-engine">
+                      <select id="proc-tts-engine" onchange="(function(v){document.getElementById('proc-hf-config').style.display=v==='huggingface'?'block':'none';document.getElementById('proc-voice-field').style.display=v==='huggingface'?'none':'block';})(this.value)">
                         <option value="fpt-ai" selected>FPT AI TTS</option>
                         <option value="edge-tts">Edge TTS (Microsoft)</option>
                         <option value="minimax">MiniMax TTS</option>
                         <option value="gtts">gTTS (Google)</option>
+                        <option value="huggingface">HuggingFace TTS</option>
                       </select>
                     </div>
-                    <div class="field">
+                    <div class="field" id="proc-voice-field">
                       <label data-i18n="lbl_tts_voice">Giọng đọc</label>
                       <select id="proc-tts-voice"></select>
+                    </div>
+                  </div>
+                  <!-- HuggingFace TTS config (ẩn mặc định) -->
+                  <div id="proc-hf-config" style="display:none;margin-top:8px">
+                    <div class="grid-2">
+                      <div class="field">
+                        <label>HF Model</label>
+                        <input type="text" id="proc-hf-model" placeholder="facebook/mms-tts-vie" value="facebook/mms-tts-vie">
+                      </div>
+                      <div class="field">
+                        <label>Device</label>
+                        <select id="proc-hf-device">
+                          <option value="cpu" selected>CPU</option>
+                          <option value="cuda">CUDA (GPU)</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div class="field mt-8">
+                      <label>Speaker Embeddings <span style="color:var(--dim);font-size:11px">(optional, cho speecht5_tts)</span></label>
+                      <div style="display:flex;gap:4px">
+                        <select id="proc-hf-embeddings" style="flex:1">
+                          <option value="">(Không dùng / Mặc định)</option>
+                        </select>
+                        <button class="btn btn-secondary btn-sm" type="button" onclick="uploadHfVoice()" title="Thêm giọng mới">+</button>
+                        <button class="btn btn-secondary btn-sm" type="button" onclick="refreshHfVoices()" title="Tải lại">↻</button>
+                      </div>
+                    </div>
+                    <div class="alert-info" style="padding:8px 12px;border-radius:6px;background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.3);color:#60a5fa;font-size:12px;margin-top:8px">
+                      Cần: <code>pip install transformers torch scipy datasets</code>. Token HF lấy từ config Translation.
                     </div>
                   </div>
                   <div class="grid-2 mt-8">

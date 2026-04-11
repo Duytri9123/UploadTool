@@ -1561,6 +1561,9 @@ async function previewConfigVoice() {
         tts_pitch: _sanitizeVoiceParam(document.getElementById('vp-tts-pitch')?.value || '+0Hz'),
         tts_rate: _sanitizeVoiceParam(document.getElementById('vp-tts-rate')?.value || '+0%'),
         tts_emotion: document.getElementById('vp-tts-emotion')?.value || 'default',
+        hf_model: document.getElementById('vp-hf-model')?.value || undefined,
+        hf_device: document.getElementById('vp-hf-device')?.value || undefined,
+        hf_embeddings: document.getElementById('vp-hf-embeddings')?.value || undefined,
       }),
     });
 
@@ -1625,3 +1628,83 @@ async function uploadOverlay(input, type) {
   }
   input.value = '';
 }
+
+/* ── HuggingFace Voice Management ───────────────────────────────────────── */
+async function refreshHfVoices() {
+  try {
+    const res = await fetch('/api/hf_voices');
+    if (!res.ok) return;
+    const data = await res.json();
+    
+    ['vp-hf-embeddings', 'tr-hf-embeddings', 'proc-hf-embeddings'].forEach(id => {
+      const select = document.getElementById(id);
+      if (!select) return;
+      const current = select.value;
+      select.innerHTML = '<option value="">(Không dùng / Mặc định)</option>';
+      (data.voices || []).forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = v.path;
+        opt.textContent = v.name;
+        select.appendChild(opt);
+      });
+      // khôi phục
+      if (Array.from(select.options).some(o => o.value === current)) {
+        select.value = current;
+      }
+    });
+  } catch (err) {
+    console.error('refreshHfVoices error:', err);
+  }
+}
+
+async function uploadHfVoice() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'audio/*';
+  input.onchange = async () => {
+    if (!input.files || !input.files[0]) return;
+    const file = input.files[0];
+    const defaultName = file.name.replace(/\.[^/.]+$/, "");
+    const name = prompt('Nhập tên cho giọng này để lưu (ví dụ: giong_cua_toi):', defaultName);
+    if (!name) return;
+    
+    toast('Đang xử lý phân tách giọng (sẽ mất khoảng vài giây)...', 'info');
+    
+    const formData = new FormData();
+    formData.append('audio', file);
+    formData.append('name', name);
+    
+    try {
+      const res = await fetch('/api/hf_voices/upload', {
+        method: 'POST',
+        body: formData
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Server error');
+      
+      toast('Tạo bản thu giọng clone thành công!', 'success');
+      
+      // Log to all possible log boxes
+      ['proc-log', 'tr-log', 'dl-log'].forEach(l => {
+        if (typeof appendLog === 'function') appendLog(l, 'Tạo giọng clone thành công: ' + name, 'success');
+      });
+      
+      await refreshHfVoices();
+      
+      // Auto-select the newly created voice
+      ['vp-hf-embeddings', 'tr-hf-embeddings', 'proc-hf-embeddings'].forEach(id => {
+        const select = document.getElementById(id);
+        if (select) select.value = data.path;
+      });
+    } catch (err) {
+      alert('Lỗi tạo giọng: ' + err.message);
+      ['proc-log', 'tr-log', 'dl-log'].forEach(l => {
+        if (typeof appendLog === 'function') appendLog(l, 'Lỗi tạo giọng: ' + err.message, 'error');
+      });
+    }
+  };
+  input.click();
+}
+
+// Gọi tải danh sách khi tải xong script
+setTimeout(refreshHfVoices, 500);
