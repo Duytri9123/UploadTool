@@ -180,6 +180,9 @@ function startProcessVideo() {
     afp_contrast:     parseFloat(document.getElementById('proc-afp-contrast')?.value || '1.03'),
     afp_speed:        parseFloat(document.getElementById('proc-afp-speed')?.value || '1.0'),
     afp_overlay_img:  document.getElementById('proc-afp-overlay-img')?.value || '',
+    // CapCut settings
+    capcut_enabled:   document.getElementById('proc-capcut-enabled')?.checked ?? false,
+    capcut_auto_open: document.getElementById('proc-capcut-auto-open')?.checked ?? false,
   };
 
   const doRequest = (body, isFormData) => fetch('/api/process_video', {
