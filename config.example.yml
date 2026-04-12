@@ -115,6 +115,13 @@ video_process:
   font_size: 18
   blur_height: 15
 
+# CapCut Integration - Tự động import video và subtitle vào CapCut
+capcut:
+  enabled: false           # Bật/tắt tính năng CapCut
+  auto_import: false       # Tự động import sau khi xử lý video
+  capcut_path: ""          # Đường dẫn CapCut (để trống để tự động tìm)
+  auto_open: false         # Tự động mở CapCut sau khi import
+
 cookies:
   msToken: YOUR_MS_TOKEN
   ttwid: YOUR_TTWID

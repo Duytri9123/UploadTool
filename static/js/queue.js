@@ -219,6 +219,9 @@ function _buildQueueProcessPayload(videoUrl) {
     keep_bg_music: queueOpts.keep_bg_music,
     bg_volume: parseFloat(document.getElementById('proc-bg-vol')?.value || '0.15'),
     process_mode: window._procMode || 'ai',
+    // CapCut settings
+    capcut_enabled: document.getElementById('dl-capcut-enabled')?.checked ?? false,
+    capcut_auto_open: document.getElementById('dl-capcut-auto-open')?.checked ?? false,
   };
 }
 

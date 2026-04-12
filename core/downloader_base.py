@@ -888,6 +888,48 @@ class BaseDownloader(ABC):
         else:
             logger.warning("auto_upload: unknown platform '%s', skipping", platform)
 
+    async def _import_to_capcut(
+        self,
+        video_path: Path,
+        srt_path: Optional[Path],
+        project_name: str,
+        capcut_cfg: dict,
+        aweme_id: str,
+    ) -> None:
+        """Import video và SRT vào CapCut draft folder."""
+        try:
+            from tools.capcut_importer import CapCutImporter
+            
+            capcut_path = capcut_cfg.get("capcut_path") or None
+            auto_open = capcut_cfg.get("auto_open", False)
+            
+            importer = CapCutImporter(capcut_path=capcut_path)
+            result = importer.import_video(
+                video_path=video_path,
+                srt_path=srt_path,
+                project_name=project_name,
+                auto_open=auto_open,
+            )
+            
+            if result.get("success"):
+                logger.info(
+                    "capcut_import: successfully imported %s to CapCut (project: %s)",
+                    aweme_id,
+                    result.get("project_name"),
+                )
+                self._progress_post(100, f"Đã import vào CapCut: {project_name}")
+            else:
+                logger.warning(
+                    "capcut_import: failed for %s: %s",
+                    aweme_id,
+                    result.get("message"),
+                )
+                self._progress_post(100, "Import CapCut thất bại")
+        
+        except Exception as e:
+            logger.error("capcut_import: error for %s: %s", aweme_id, e)
+            self._progress_post(100, "Import CapCut gặp lỗi")
+
     async def _run_video_processor(
         self, video_path: Path, vp_cfg: dict, aweme_id: str
     ) -> None:
@@ -1068,3 +1110,15 @@ class BaseDownloader(ABC):
                     logger.debug("video_process: cleanup skipped for %s: %s", p, e)
 
         logger.info("video_process: done for %s", aweme_id)
+        
+        # Step 5: Auto-import to CapCut if enabled
+        capcut_cfg = self.config.get("capcut") or {}
+        if capcut_cfg.get("enabled") and capcut_cfg.get("auto_import"):
+            self._progress_post(95, "Đang import vào CapCut")
+            await self._import_to_capcut(
+                video_path=voice_out if voice_out and voice_out.exists() else (processed_path or video_path),
+                srt_path=vi_srt_path or raw_srt_path,
+                project_name=post_title,
+                capcut_cfg=capcut_cfg,
+                aweme_id=aweme_id,
+            )
