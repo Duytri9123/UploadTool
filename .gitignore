@@ -16,6 +16,7 @@ build/
 dist/
 .eggs/
 *.egg-info/
+pip-wheel-metadata/
 
 # Virtual environments
 .venv/
@@ -32,8 +33,6 @@ logs/
 # Runtime output
 Downloaded/
 Transcripts/
-
-# Database
 dy_downloader.db
 *.db
 *.sqlite
