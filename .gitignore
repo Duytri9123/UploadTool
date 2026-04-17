@@ -1,8 +1,8 @@
 # Python cache
-# __pycache__/
-# *.py[cod]
-# *.pyo
-# *.pyd
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
 
 # Test/cache artifacts
 .pytest_cache/
@@ -19,9 +19,9 @@ htmlcov/
 # pip-wheel-metadata/
 
 # Virtual environments
-# .venv/
-# venv/
-# env/
+.venv/
+venv/
+env/
 
 # # OS files
 # .DS_Store
