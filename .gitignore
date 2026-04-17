@@ -1,8 +1,8 @@
 # Python cache
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
+# __pycache__/
+# *.py[cod]
+# *.pyo
+# *.pyd
 
 # Test/cache artifacts
 .pytest_cache/
@@ -12,39 +12,39 @@ __pycache__/
 htmlcov/
 
 # Build/package artifacts
-build/
-dist/
-.eggs/
-*.egg-info/
-pip-wheel-metadata/
+# build/
+# dist/
+# .eggs/
+# *.egg-info/
+# pip-wheel-metadata/
 
 # Virtual environments
-.venv/
-venv/
-env/
+# .venv/
+# venv/
+# env/
 
-# OS files
-.DS_Store
+# # OS files
+# .DS_Store
 
-# Logs
-logs/
-*.log
+# # Logs
+# logs/
+# *.log
 
 # Runtime output
 Downloaded/
 Transcripts/
-dy_downloader.db
-*.db
-*.sqlite
-*.sqlite3
+# dy_downloader.db
+# *.db
+# *.sqlite
+# *.sqlite3
 
 # Local config/secrets
-config*.yml
-!config.example.yml
-.cookies.json
-config/cookies.json
-.omx/
-client_secrets.json
-youtube_token.json
-.youtube_tokens/
-.tiktok_tokens/
+# config*.yml
+# !config.example.yml
+# .cookies.json
+# config/cookies.json
+# .omx/
+# client_secrets.json
+# youtube_token.json
+# .youtube_tokens/
+# .tiktok_tokens/
