@@ -4,24 +4,24 @@ window._trSelectedFile = null;
 
 const TTS_VOICE_PRESETS = {
   'fpt-ai': [
-    { value: 'banmai', label: 'Ban Mai — Nữ miền Bắc (Dễ nghe)' },
-    { value: 'thuminh', label: 'Thu Minh — Nữ miền Nam (Truyền cảm)' },
-    { value: 'myan', label: 'Mỹ An — Nữ miền Trung' },
-    { value: 'leminh', label: 'Lê Minh — Nam miền Bắc' },
-    { value: 'minhquang', label: 'Minh Quang — Nam miền Nam' },
-    { value: 'vungoc', label: 'Vũ Ngọc — Nữ miền Nam (Vàng)' },
-  ],
-  'openai-tts': [
-    { value: 'alloy', label: 'Alloy — Trung tính (OpenAI)' },
-    { value: 'echo', label: 'Echo — Nam (OpenAI)' },
-    { value: 'fable', label: 'Fable — Nam (OpenAI)' },
-    { value: 'onyx', label: 'Onyx — Nam trầm (OpenAI)' },
-    { value: 'nova', label: 'Nova — Nữ (OpenAI)' },
-    { value: 'shimmer', label: 'Shimmer — Nữ nhẹ (OpenAI)' },
+    { value: 'banmai', label: 'Ban Mai (FPT - Nữ)' },
+    { value: 'thuminh', label: 'Thu Minh (FPT - Nữ)' },
+    { value: 'myan', label: 'My An (FPT - Nữ)' },
+    { value: 'leminh', label: 'Le Minh (FPT - Nam)' },
   ],
   'edge-tts': [
-    { value: 'vi-VN-HoaiMyNeural', label: 'Hoài My — Nữ (Edge)' },
-    { value: 'vi-VN-NamMinhNeural', label: 'Nam Minh — Nam (Edge)' },
+    { value: 'vi-VN-HoaiMyNeural', label: 'Hoai My (Edge - Nữ)' },
+    { value: 'vi-VN-NamMinhNeural', label: 'Nam Minh (Edge - Nam)' },
+  ],
+  'minimax': [
+    { value: 'Calm_Woman',      label: 'Calm Woman (MiniMax - Nữ)' },
+    { value: 'Gentle_Woman',    label: 'Gentle Woman (MiniMax - Nữ)' },
+    { value: 'Lively_Girl',     label: 'Lively Girl (MiniMax - Nữ)' },
+    { value: 'Soft_Female',     label: 'Soft Female (MiniMax - Nữ)' },
+    { value: 'Confident_Man',   label: 'Confident Man (MiniMax - Nam)' },
+    { value: 'Deep_Voice_Man',  label: 'Deep Voice Man (MiniMax - Nam)' },
+    { value: 'Energetic_Male',  label: 'Energetic Male (MiniMax - Nam)' },
+    { value: 'Friendly_Person', label: 'Friendly Person (MiniMax)' },
   ],
   gtts: [
     { value: 'vi', label: 'Vietnamese (gTTS)' },
@@ -29,9 +29,9 @@ const TTS_VOICE_PRESETS = {
 };
 
 const TTS_DEFAULT_VOICE = {
-  'fpt-ai': 'banmai',
-  'openai-tts': 'nova',
+  'fpt-ai':  'banmai',
   'edge-tts': 'vi-VN-HoaiMyNeural',
+  'minimax': 'Calm_Woman',
   gtts: 'vi',
 };
 
@@ -73,6 +73,13 @@ function switchPage(name) {
 
 function toggleSidebar() {
   document.getElementById('sidebar').classList.toggle('collapsed');
+}
+
+function toggleCard(header) {
+  const card = header.closest('.card');
+  if (card && card.classList.contains('card-collapsible')) {
+    card.classList.toggle('collapsed');
+  }
 }
 
 /* ── Video Processing ────────────────────────────────────────────────────── */
@@ -134,6 +141,11 @@ function startProcessVideo() {
     translate_subs:   document.getElementById('proc-translate-subs')?.checked ?? true,
     burn_vi_subs:     document.getElementById('proc-burn-vi')?.checked ?? true,
     voice_convert:    document.getElementById('proc-voice')?.checked ?? false,
+    tts_engine:       document.getElementById('proc-tts-engine')?.value || 'edge-tts',
+    tts_voice:        document.getElementById('proc-tts-voice')?.value || 'vi-VN-HoaiMyNeural',
+    tts_pitch:        _sanitizeVoiceParam(document.getElementById('proc-tts-pitch')?.value || '+0Hz'),
+    tts_rate:         _sanitizeVoiceParam(document.getElementById('proc-tts-rate')?.value || '+0%'),
+    tts_emotion:      document.getElementById('proc-tts-emotion')?.value || 'default',
     keep_bg_music:    document.getElementById('proc-keep-bg')?.checked ?? false,
     font_size:        parseInt(document.getElementById('proc-font-size')?.value || '32', 10),
     subtitle_position: document.getElementById('proc-sub-pos')?.value || 'bottom',
@@ -141,7 +153,31 @@ function startProcessVideo() {
     tts_engine:       document.getElementById('proc-tts-engine')?.value || 'fpt-ai',
     tts_voice:        document.getElementById('proc-tts-voice')?.value || 'banmai',
     tts_speed:        parseFloat(document.getElementById('proc-tts-speed')?.value || '1.0'),
-    pitch_semitones:  parseFloat(document.getElementById('proc-tts-pitch')?.value || '0.0'),
+    auto_speed:       document.getElementById('proc-auto-speed')?.checked ?? true,
+    process_mode:     window._procMode || 'ai',
+    // Voice FX (Review style)
+    fx_enabled:       document.getElementById('proc-fx-enabled')?.checked ?? false,
+    fx_pitch:         parseFloat(document.getElementById('proc-fx-pitch')?.value || '1.5'),
+    fx_speed:         parseFloat(document.getElementById('proc-fx-speed')?.value || '1.08'),
+    fx_bass:          parseInt(document.getElementById('proc-fx-bass')?.value || '-2'),
+    fx_mid:           parseInt(document.getElementById('proc-fx-mid')?.value || '2'),
+    fx_treble:        parseInt(document.getElementById('proc-fx-treble')?.value || '3'),
+    fx_comp:          document.getElementById('proc-fx-comp')?.value || 'light',
+    fx_reverb:        parseInt(document.getElementById('proc-fx-reverb')?.value || '5'),
+    // Anti-Fingerprint
+    afp_enabled:      document.getElementById('proc-afp-enabled')?.checked ?? false,
+    afp_flip:         document.getElementById('proc-afp-flip')?.checked ?? false,
+    afp_vignette:     document.getElementById('proc-afp-vignette')?.checked ?? false,
+    afp_vertical:     document.getElementById('proc-afp-vertical')?.checked ?? false,
+    afp_scale_w:      parseInt(document.getElementById('proc-afp-scale-w')?.value || '0'),
+    afp_scale_h:      parseInt(document.getElementById('proc-afp-scale-h')?.value || '0'),
+    afp_brightness:   parseFloat(document.getElementById('proc-afp-brightness')?.value || '0.02'),
+    afp_contrast:     parseFloat(document.getElementById('proc-afp-contrast')?.value || '1.03'),
+    afp_speed:        parseFloat(document.getElementById('proc-afp-speed')?.value || '1.0'),
+    afp_overlay_img:  document.getElementById('proc-afp-overlay-img')?.value || '',
+    // CapCut settings
+    capcut_enabled:   document.getElementById('proc-capcut-enabled')?.checked ?? false,
+    capcut_auto_open: document.getElementById('proc-capcut-auto-open')?.checked ?? false,
   };
 
   const doRequest = (body, isFormData) => fetch('/api/process_video', {
@@ -338,6 +374,130 @@ function startTranscribe() {
   runRequest(JSON.stringify(payload), false);
 }
 
+async function extractAudioOnly() {
+  const filePath = document.getElementById('tr-file')?.value?.trim() || '';
+  const outDir   = document.getElementById('tr-out')?.value?.trim() || '';
+  const selectedFile = window._trSelectedFile || document.getElementById('tr-import-file')?.files?.[0] || null;
+
+  if (!filePath && !selectedFile) {
+    alert('Vui lòng chọn file video trước.');
+    return;
+  }
+
+  _appendTrLog('Đang tách MP3...', 'info');
+
+  try {
+    let res;
+    if (selectedFile) {
+      const form = new FormData();
+      form.append('video_file', selectedFile);
+      if (outDir) form.append('output_dir', outDir);
+      res = await fetch('/api/extract_audio', { method: 'POST', body: form });
+    } else {
+      res = await fetch('/api/extract_audio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ video_path: filePath, output_dir: outDir }),
+      });
+    }
+    const data = await res.json();
+    if (data.ok) {
+      _appendTrLog('✅ Tách MP3 thành công: ' + data.output_path, 'success');
+      toast('Tách MP3 thành công', 'success');
+    } else {
+      _appendTrLog('❌ Lỗi: ' + (data.error || 'Unknown'), 'error');
+    }
+  } catch (err) {
+    _appendTrLog('❌ Lỗi kết nối: ' + err, 'error');
+  }
+}
+
+async function generateTtsFromAss() {
+  const filePath = document.getElementById('tr-file')?.value?.trim() || '';
+  const outDir   = document.getElementById('tr-out')?.value?.trim() || '';
+  const selectedFile = window._trSelectedFile || document.getElementById('tr-import-file')?.files?.[0] || null;
+
+  if (!filePath && !selectedFile) {
+    alert('Vui lòng chọn file .ass trước.');
+    return;
+  }
+
+  const btn = document.querySelector('[onclick="generateTtsFromAss()"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Đang tạo...'; }
+  clearLog('tr-log');
+  _setTrProgress(0, '--', 0, '--');
+
+  const params = {
+    output_dir:  outDir,
+    tts_engine:  document.getElementById('tr-tts-engine')?.value  || 'edge-tts',
+    tts_voice:   document.getElementById('tr-tts-voice')?.value   || 'vi-VN-HoaiMyNeural',
+    tts_pitch:   _sanitizeVoiceParam(document.getElementById('tr-tts-pitch')?.value  || '+0Hz'),
+    tts_rate:    _sanitizeVoiceParam(document.getElementById('tr-tts-rate')?.value   || '+0%'),
+    tts_emotion: document.getElementById('tr-tts-emotion')?.value || 'default',
+    fx_enabled:  String(document.getElementById('tr-fx-enabled')?.checked || false),
+    fx_pitch:    document.getElementById('tr-fx-pitch')?.value   || '1.5',
+    fx_speed:    document.getElementById('tr-fx-speed')?.value   || '1.08',
+    fx_bass:     document.getElementById('tr-fx-bass')?.value    || '-2',
+    fx_mid:      document.getElementById('tr-fx-mid')?.value     || '2',
+    fx_treble:   document.getElementById('tr-fx-treble')?.value  || '3',
+    fx_comp:     document.getElementById('tr-fx-comp')?.value    || 'none',
+    fx_reverb:   document.getElementById('tr-fx-reverb')?.value  || '0',
+  };
+
+  const restore = () => {
+    if (btn) { btn.disabled = false; btn.textContent = 'Tạo MP3 từ file .ass'; }
+  };
+
+  try {
+    let res;
+    if (selectedFile) {
+      const form = new FormData();
+      form.append('ass_file', selectedFile);
+      Object.entries(params).forEach(([k, v]) => form.append(k, v));
+      res = await fetch('/api/tts_from_ass', { method: 'POST', body: form });
+    } else {
+      res = await fetch('/api/tts_from_ass', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ass_path: filePath, ...params }),
+      });
+    }
+
+    if (!res.ok || !res.body) throw new Error('Không thể kết nối server');
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    const read = async () => {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) { restore(); break; }
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const d = JSON.parse(trimmed);
+            if (d.log) _appendTrLog(d.log, d.level || 'info');
+            if (d.overall !== undefined) _setTrProgress(d.overall, d.overall_lbl || '--', 0, '--');
+            if (d.ok === true) toast('Tạo MP3 thành công: ' + d.output_path, 'success');
+            if (d.ok === false) toast('Lỗi: ' + (d.error || 'Unknown'), 'error');
+          } catch (_) {
+            _appendTrLog(trimmed, 'info');
+          }
+        }
+      }
+    };
+    await read();
+  } catch (err) {
+    _appendTrLog('❌ Lỗi kết nối: ' + err, 'error');
+    restore();
+  }
+}
+
 function _handleTrLine(line) {
   try {
     const d = JSON.parse(line);
@@ -388,6 +548,17 @@ async function previewTranscribeVoice() {
         text,
         tts_engine: document.getElementById('tr-tts-engine')?.value || 'edge-tts',
         tts_voice: document.getElementById('tr-tts-voice')?.value || 'vi-VN-HoaiMyNeural',
+        tts_pitch: _sanitizeVoiceParam(document.getElementById('tr-tts-pitch')?.value || '+0Hz'),
+        tts_rate: _sanitizeVoiceParam(document.getElementById('tr-tts-rate')?.value || '+0%'),
+        tts_emotion: document.getElementById('tr-tts-emotion')?.value || 'default',
+        fx_enabled: document.getElementById('tr-fx-enabled')?.checked || false,
+        fx_pitch: parseFloat(document.getElementById('tr-fx-pitch')?.value || '1.5'),
+        fx_speed: parseFloat(document.getElementById('tr-fx-speed')?.value || '1.08'),
+        fx_bass: parseFloat(document.getElementById('tr-fx-bass')?.value || '-2'),
+        fx_mid: parseFloat(document.getElementById('tr-fx-mid')?.value || '2'),
+        fx_treble: parseFloat(document.getElementById('tr-fx-treble')?.value || '3'),
+        fx_comp: document.getElementById('tr-fx-comp')?.value || 'none',
+        fx_reverb: parseFloat(document.getElementById('tr-fx-reverb')?.value || '0'),
       }),
     });
 
@@ -423,11 +594,11 @@ async function previewTranscribeVoice() {
   }
 }
 
-async function previewProcVoice() {
-  const text = document.getElementById('proc-preview-text')?.value?.trim()
-    || 'Xin chào, đây là giọng đọc tiếng Việt.';
-  const btn = document.getElementById('btn-proc-preview');
+async function previewProcessVoice() {
+  const text = 'Xin chào, đây là phần nghe thử giọng đọc xử lý video.';
+  const btn = document.querySelector('button[onclick="previewProcessVoice()"]');
   if (btn) { btn.disabled = true; btn.textContent = 'Đang tạo...'; }
+
   try {
     const res = await fetch('/api/tts_preview', {
       method: 'POST',
@@ -435,29 +606,29 @@ async function previewProcVoice() {
       body: JSON.stringify({
         text,
         tts_engine: document.getElementById('proc-tts-engine')?.value || 'edge-tts',
-        tts_voice:  document.getElementById('proc-tts-voice')?.value || 'vi-VN-HoaiMyNeural',
-        tts_speed:  parseFloat(document.getElementById('proc-tts-speed')?.value || '1.0'),
-        pitch_semitones: parseFloat(document.getElementById('proc-tts-pitch')?.value || '0'),
+        tts_voice: document.getElementById('proc-tts-voice')?.value || 'vi-VN-HoaiMyNeural',
+        tts_pitch: _sanitizeVoiceParam(document.getElementById('proc-tts-pitch')?.value || '+0Hz'),
+        tts_rate: _sanitizeVoiceParam(document.getElementById('proc-tts-rate')?.value || '+0%'),
+        tts_emotion: document.getElementById('proc-tts-emotion')?.value || 'default',
       }),
     });
-    if (!res.ok) { const e = await res.json(); throw new Error(e.error || 'Lỗi'); }
+
+    if (!res.ok) throw new Error('Preview failed');
     const blob = await res.blob();
     const audio = document.getElementById('proc-preview-audio');
     if (audio) {
-      if (audio._objUrl) URL.revokeObjectURL(audio._objUrl);
-      audio._objUrl = URL.createObjectURL(blob);
-      audio.src = audio._objUrl;
+      if (window._procPreviewUrl) URL.revokeObjectURL(window._procPreviewUrl);
+      window._procPreviewUrl = URL.createObjectURL(blob);
+      audio.src = window._procPreviewUrl;
       audio.style.display = 'block';
-      audio.play().catch(() => {});
+      audio.play();
     }
-  } catch (e) {
-    toast('Lỗi nghe thử: ' + e.message, 'error');
+  } catch (err) {
+    alert('Lỗi: ' + err.message);
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '▶ Nghe thử'; }
+    if (btn) { btn.disabled = false; btn.textContent = 'Nghe thử'; }
   }
 }
-
-/* ── Multi-file publish queue ────────────────────────────────────────────── */
 window._procFileQueue = []; // [{file, name, path}]
 
 function handlePublishFileInput(input) {
@@ -548,11 +719,10 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('proc-tts-engine')?.addEventListener('change', function() {
     _syncVoiceOptions('proc-tts-engine', 'proc-tts-voice');
   });
-  _syncVoiceOptions('proc-tts-engine', 'proc-tts-voice');
-
   document.getElementById('vp-tts-engine')?.addEventListener('change', function() {
     _syncVoiceOptions('vp-tts-engine', 'vp-tts-voice');
   });
+  _syncVoiceOptions('proc-tts-engine', 'proc-tts-voice');
   _syncVoiceOptions('vp-tts-engine', 'vp-tts-voice');
 
   document.getElementById('tr-import-file')?.addEventListener('change', function() {
@@ -579,6 +749,17 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       };
       reader.readAsText(file, 'utf-8');
+    }
+  });
+
+  // Clear selected file when user manually types a path
+  document.getElementById('tr-file')?.addEventListener('input', function() {
+    if (this.value.trim()) {
+      window._trSelectedFile = null;
+      const nameLabel = document.getElementById('tr-file-name');
+      if (nameLabel) nameLabel.textContent = '--';
+      const fileInput = document.getElementById('tr-import-file');
+      if (fileInput) fileInput.value = '';
     }
   });
 
@@ -613,52 +794,99 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   switchPublishPlatform(localStorage.getItem('publish_platform') || 'youtube');
 
-  // ── Anti-Fingerprint handlers ──────────────────────────────────────────
-  const _uploadAntiFingerprintFile = async (file, pathId, previewId) => {
-    if (!file) return;
-    const pathEl = document.getElementById(pathId);
-    const previewEl = document.getElementById(previewId);
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      const res = await fetch('/api/upload-image', {
-        method: 'POST',
-        body: formData,
-      });
-      const data = await res.json();
-      if (!data.ok) {
-        alert('Upload failed: ' + (data.error || 'Unknown error'));
+  // Handle collapsible cards
+  document.querySelectorAll('.card-collapsible .card-header').forEach(header => {
+    header.addEventListener('click', (e) => {
+      // Don't toggle if clicking on an interactive element inside header
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON' || e.target.tagName === 'SELECT' || e.target.closest('.card-actions')) {
         return;
       }
-      if (pathEl) pathEl.value = data.path;
-      if (previewEl) previewEl.textContent = file.name;
-      await _saveAntiFingerprintConfig();
-    } catch (err) {
-      console.error('anti-fingerprint upload error:', err);
-      alert('Upload error: ' + (err.message || err));
-    }
-  };
-
-  document.getElementById('overlay-image-file')?.addEventListener('change', async (e) => {
-    await _uploadAntiFingerprintFile(e.target.files?.[0], 'overlay-image-path', 'overlay-image-preview');
+      toggleCard(header);
+    });
   });
 
-  document.getElementById('logo-image-file')?.addEventListener('change', async (e) => {
-    await _uploadAntiFingerprintFile(e.target.files?.[0], 'logo-image-path', 'logo-image-preview');
-  });
-
-  document.getElementById('cfg-overlay-image-file')?.addEventListener('change', async (e) => {
-    await _uploadAntiFingerprintFile(e.target.files?.[0], 'cfg-overlay-image-path', 'cfg-overlay-image-path');
-  });
-
-  document.getElementById('cfg-logo-image-file')?.addEventListener('change', async (e) => {
-    await _uploadAntiFingerprintFile(e.target.files?.[0], 'cfg-logo-image-path', 'cfg-logo-image-path');
-  });
-
-  ['anti-fingerprint-enabled', 'overlay-opacity', 'logo-enabled', 'logo-position'].forEach(id => {
-    document.getElementById(id)?.addEventListener('change', () => _saveAntiFingerprintConfig());
-  });
+  _initProcessConfigSync();
 });
+
+/* ── Synchronization between Process and Config ─────────────────────────── */
+function _initProcessConfigSync() {
+  const mapping = [
+    { proc: 'proc-model', cfg: 'vp-model' },
+    { proc: 'proc-lang', cfg: 'vp-lang' },
+    { proc: 'proc-burn', cfg: 'vp-burn', type: 'checkbox' },
+    { proc: 'proc-translate-subs', cfg: 'vp-translate', type: 'checkbox' },
+    { proc: 'proc-burn-vi', cfg: 'vp-burn-vi', type: 'checkbox' },
+    { proc: 'proc-voice', cfg: 'vp-voice', type: 'checkbox' },
+    { proc: 'proc-keep-bg', cfg: 'vp-keep-bg', type: 'checkbox' },
+    { proc: 'proc-tts-voice', cfg: 'vp-tts-voice' },
+    { proc: 'proc-font-size', cfg: 'vp-font-size' },
+    { proc: 'proc-blur-original', cfg: 'vp-blur-original', type: 'checkbox' },
+    { proc: 'proc-tts-engine', cfg: 'vp-tts-engine' },
+    { proc: 'proc-bg-vol', cfg: 'vp-bg-volume' },
+    { proc: 'proc-tts-pitch', cfg: 'vp-tts-pitch' },
+    { proc: 'proc-tts-rate', cfg: 'vp-tts-rate' },
+    { proc: 'proc-tts-emotion', cfg: 'vp-tts-emotion' },
+    { proc: 'proc-afp-enabled', cfg: 'vp-afp-enabled', type: 'checkbox' },
+    { proc: 'proc-afp-flip',    cfg: 'vp-afp-flip',    type: 'checkbox' },
+    { proc: 'proc-afp-vignette',cfg: 'vp-afp-vignette',type: 'checkbox' },
+    { proc: 'proc-afp-vertical',cfg: 'vp-afp-vertical',type: 'checkbox' },
+    { proc: 'proc-afp-scale-w', cfg: 'vp-afp-scale-w' },
+    { proc: 'proc-afp-scale-h', cfg: 'vp-afp-scale-h' },
+    { proc: 'proc-afp-overlay-img', cfg: 'vp-afp-overlay-img' }
+  ];
+
+  mapping.forEach(m => {
+    const pEl = document.getElementById(m.proc);
+    const cEl = document.getElementById(m.cfg);
+    if (!pEl || !cEl) return;
+
+    const sync = (src, dest) => {
+      if (m.type === 'checkbox') dest.checked = src.checked;
+      else dest.value = src.value;
+      dest.dispatchEvent(new Event('change'));
+    };
+
+    pEl.addEventListener('change', () => sync(pEl, cEl));
+    cEl.addEventListener('change', () => sync(cEl, pEl));
+  });
+}
+
+function syncProcessConfigFromLoaded() {
+  const mapping = [
+    { proc: 'proc-model', cfg: 'vp-model' },
+    { proc: 'proc-lang', cfg: 'vp-lang' },
+    { proc: 'proc-burn', cfg: 'vp-burn', type: 'checkbox' },
+    { proc: 'proc-translate-subs', cfg: 'vp-translate', type: 'checkbox' },
+    { proc: 'proc-burn-vi', cfg: 'vp-burn-vi', type: 'checkbox' },
+    { proc: 'proc-voice', cfg: 'vp-voice', type: 'checkbox' },
+    { proc: 'proc-keep-bg', cfg: 'vp-keep-bg', type: 'checkbox' },
+    { proc: 'proc-tts-voice', cfg: 'vp-tts-voice' },
+    { proc: 'proc-font-size', cfg: 'vp-font-size' },
+    { proc: 'proc-blur-original', cfg: 'vp-blur-original', type: 'checkbox' },
+    { proc: 'proc-tts-engine', cfg: 'vp-tts-engine' },
+    { proc: 'proc-bg-vol', cfg: 'vp-bg-volume' },
+    { proc: 'proc-tts-pitch', cfg: 'vp-tts-pitch' },
+    { proc: 'proc-tts-rate', cfg: 'vp-tts-rate' },
+    { proc: 'proc-tts-emotion', cfg: 'vp-tts-emotion' },
+    { proc: 'proc-afp-enabled', cfg: 'vp-afp-enabled', type: 'checkbox' },
+    { proc: 'proc-afp-flip',    cfg: 'vp-afp-flip',    type: 'checkbox' },
+    { proc: 'proc-afp-vignette',cfg: 'vp-afp-vignette',type: 'checkbox' },
+    { proc: 'proc-afp-vertical',cfg: 'vp-afp-vertical',type: 'checkbox' },
+    { proc: 'proc-afp-scale-w', cfg: 'vp-afp-scale-w' },
+    { proc: 'proc-afp-scale-h', cfg: 'vp-afp-scale-h' },
+    { proc: 'proc-afp-overlay-img', cfg: 'vp-afp-overlay-img' }
+  ];
+
+  mapping.forEach(m => {
+    const pEl = document.getElementById(m.proc);
+    const cEl = document.getElementById(m.cfg);
+    if (pEl && cEl) {
+      if (m.type === 'checkbox') pEl.checked = cEl.checked;
+      else pEl.value = cEl.value;
+      pEl.dispatchEvent(new Event('change'));
+    }
+  });
+}
 
 /* ── Publish Upload ─────────────────────────────────────────────────────── */
 window._publishLastOutputPath = null;
@@ -1311,92 +1539,171 @@ async function publishSelectedPlatform() {
     await publishBothOrSingle(platform);
   }
 }
+async function previewConfigVoice() {
+  const text = 'Xin chào, đây là phần nghe thử giọng đọc từ cấu hình.';
+  const btn = document.querySelector('button[onclick="previewConfigVoice()"]');
+  const audio = document.getElementById('vp-preview-audio');
+  if (!btn) return;
 
-/* ── Anti-Fingerprint config helpers ────────────────────────────────────── */
-function getAntiFingerprintConfig() {
-  const getInput = (procId, cfgId) => {
-    const procEl = document.getElementById(procId);
-    if (procEl) return procEl;
-    return document.getElementById(cfgId);
-  };
-
-  const enabledEl = getInput('anti-fingerprint-enabled', 'cfg-anti-fingerprint-enabled');
-  const overlayEl = getInput('overlay-image-path', 'cfg-overlay-image-path');
-  const opacityEl = getInput('overlay-opacity', 'cfg-overlay-opacity');
-  const logoEnabledEl = getInput('logo-enabled', 'cfg-logo-enabled');
-  const logoEl = getInput('logo-image-path', 'cfg-logo-image-path');
-  const logoPosEl = getInput('logo-position', 'cfg-logo-position');
-
-  return {
-    anti_fingerprint: {
-      enabled: enabledEl?.checked ?? false,
-      overlay_image: overlayEl?.value?.trim() || '',
-      overlay_opacity: parseFloat(opacityEl?.value || '0.02'),
-      logo_enabled: logoEnabledEl?.checked ?? false,
-      logo_image: logoEl?.value?.trim() || '',
-      logo_position: logoPosEl?.value || 'bottom-left',
-      brightness: parseFloat(document.getElementById('cfg-brightness')?.value || '0.02'),
-      contrast: parseFloat(document.getElementById('cfg-contrast')?.value || '1.03'),
-      saturation: parseFloat(document.getElementById('cfg-saturation')?.value || '1.05'),
-      sharpness: parseFloat(document.getElementById('cfg-sharpness')?.value || '0.5'),
-      scale_w: parseInt(document.getElementById('cfg-scale-w')?.value || '0', 10),
-      scale_h: parseInt(document.getElementById('cfg-scale-h')?.value || '0', 10),
-      crop_pct: parseFloat(document.getElementById('cfg-crop-pct')?.value || '0.03'),
-      flip_h: document.getElementById('cfg-flip-h')?.checked ?? false,
-      vignette: document.getElementById('cfg-vignette')?.checked ?? true,
-      speed: parseFloat(document.getElementById('cfg-speed')?.value || '1.0'),
-    },
-  };
-}
-
-async function _saveAntiFingerprintConfig() {
-  try {
-    const af = getAntiFingerprintConfig();
-    await API.post('/api/config', { video_process: af });
-  } catch (e) {
-    console.warn('save anti-fingerprint config error:', e);
-  }
-}
-
-
-/* ── Vertical Video ──────────────────────────────────────────────────────── */
-async function makeVerticalVideo() {
-  const videoPath = document.getElementById('proc-video')?.value?.trim();
-  if (!videoPath) { alert('Vui lòng chọn file video trước'); return; }
-
-  const btn = event?.currentTarget;
-  if (btn) { btn.disabled = true; btn.textContent = 'Đang tạo...'; }
-
-  const logBox = document.getElementById('vert-log');
-  if (logBox) { logBox.style.display = 'block'; logBox.innerHTML = ''; }
-
-  const sizeVal = document.getElementById('vert-size')?.value || '1080x1920';
-  const [tw, th] = sizeVal.split('x').map(Number);
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '...';
 
   try {
-    const res = await fetch('/api/make_vertical_video', {
+    const res = await fetch('/api/tts_preview', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        video_path: videoPath,
-        out_dir: document.getElementById('proc-out')?.value?.trim() || '',
-        target_w: tw,
-        target_h: th,
-        blur_height_pct: parseFloat(document.getElementById('vert-blur-height')?.value || '18') / 100,
-        blur_strength: parseInt(document.getElementById('vert-blur-strength')?.value || '40', 10),
-        shadow_opacity: parseFloat(document.getElementById('vert-shadow-opacity')?.value || '0.55'),
+        text,
+        tts_engine: document.getElementById('vp-tts-engine')?.value || 'edge-tts',
+        tts_voice: document.getElementById('vp-tts-voice')?.value || 'vi-VN-HoaiMyNeural',
+        tts_pitch: _sanitizeVoiceParam(document.getElementById('vp-tts-pitch')?.value || '+0Hz'),
+        tts_rate: _sanitizeVoiceParam(document.getElementById('vp-tts-rate')?.value || '+0%'),
+        tts_emotion: document.getElementById('vp-tts-emotion')?.value || 'default',
+        hf_model: document.getElementById('vp-hf-model')?.value || undefined,
+        hf_device: document.getElementById('vp-hf-device')?.value || undefined,
+        hf_embeddings: document.getElementById('vp-hf-embeddings')?.value || undefined,
       }),
     });
-    const data = await res.json();
-    if (data.ok) {
-      if (logBox) logBox.innerHTML = `<span style="color:#4caf50">✓ Xong: ${data.output_path}</span>`;
-      _procFileQueueAdd(data.output_path);
-    } else {
-      if (logBox) logBox.innerHTML = `<span style="color:#ff5555">✗ Lỗi: ${data.error}</span>`;
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Lỗi preview');
     }
-  } catch (e) {
-    if (logBox) logBox.innerHTML = `<span style="color:#ff5555">✗ ${e.message}</span>`;
+
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    if (audio) {
+      audio.src = url;
+      audio.style.display = 'inline-block';
+      audio.play();
+    }
+  } catch (err) {
+    alert('Lỗi preview giọng: ' + err.message);
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '📱 Tạo video dọc'; }
+    btn.disabled = false;
+    btn.textContent = originalText;
   }
 }
+
+function _sanitizeVoiceParam(val) {
+  if (!val) return '+0%';
+  val = String(val).trim();
+  // Ensure starts with + or -
+  if (!val.startsWith('+') && !val.startsWith('-')) {
+    val = '+' + val;
+  }
+  // Fallback to % if no unit
+  if (!val.endsWith('%') && !val.endsWith('Hz')) {
+    val += '%';
+  }
+  return val;
+}
+
+/* ── Upload Overlay Image ───────────────────────────────────────────────── */
+async function uploadOverlay(input, type) {
+  const file = input?.files?.[0];
+  if (!file) return;
+
+  const form = new FormData();
+  form.append('file', file);
+  form.append('type', type || 'overlay');
+
+  try {
+    const res = await fetch('/api/upload_anti_fp_image', { method: 'POST', body: form });
+    if (!res.ok) throw new Error('Upload thất bại');
+    const data = await res.json();
+    if (data.path) {
+      // Fill path into all AFP overlay inputs
+      const imgInputs = ['proc-afp-overlay-img', 'vp-afp-overlay-img'];
+      imgInputs.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = data.path;
+      });
+      toast('✓ Đã upload: ' + file.name, 'success');
+    }
+  } catch (err) {
+    alert('Lỗi upload ảnh: ' + err.message);
+  }
+  input.value = '';
+}
+
+/* ── HuggingFace Voice Management ───────────────────────────────────────── */
+async function refreshHfVoices() {
+  try {
+    const res = await fetch('/api/hf_voices');
+    if (!res.ok) return;
+    const data = await res.json();
+    
+    ['vp-hf-embeddings', 'tr-hf-embeddings', 'proc-hf-embeddings'].forEach(id => {
+      const select = document.getElementById(id);
+      if (!select) return;
+      const current = select.value;
+      select.innerHTML = '<option value="">(Không dùng / Mặc định)</option>';
+      (data.voices || []).forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = v.path;
+        opt.textContent = v.name;
+        select.appendChild(opt);
+      });
+      // khôi phục
+      if (Array.from(select.options).some(o => o.value === current)) {
+        select.value = current;
+      }
+    });
+  } catch (err) {
+    console.error('refreshHfVoices error:', err);
+  }
+}
+
+async function uploadHfVoice() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'audio/*';
+  input.onchange = async () => {
+    if (!input.files || !input.files[0]) return;
+    const file = input.files[0];
+    const defaultName = file.name.replace(/\.[^/.]+$/, "");
+    const name = prompt('Nhập tên cho giọng này để lưu (ví dụ: giong_cua_toi):', defaultName);
+    if (!name) return;
+    
+    toast('Đang xử lý phân tách giọng (sẽ mất khoảng vài giây)...', 'info');
+    
+    const formData = new FormData();
+    formData.append('audio', file);
+    formData.append('name', name);
+    
+    try {
+      const res = await fetch('/api/hf_voices/upload', {
+        method: 'POST',
+        body: formData
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Server error');
+      
+      toast('Tạo bản thu giọng clone thành công!', 'success');
+      
+      // Log to all possible log boxes
+      ['proc-log', 'tr-log', 'dl-log'].forEach(l => {
+        if (typeof appendLog === 'function') appendLog(l, 'Tạo giọng clone thành công: ' + name, 'success');
+      });
+      
+      await refreshHfVoices();
+      
+      // Auto-select the newly created voice
+      ['vp-hf-embeddings', 'tr-hf-embeddings', 'proc-hf-embeddings'].forEach(id => {
+        const select = document.getElementById(id);
+        if (select) select.value = data.path;
+      });
+    } catch (err) {
+      alert('Lỗi tạo giọng: ' + err.message);
+      ['proc-log', 'tr-log', 'dl-log'].forEach(l => {
+        if (typeof appendLog === 'function') appendLog(l, 'Lỗi tạo giọng: ' + err.message, 'error');
+      });
+    }
+  };
+  input.click();
+}
+
+// Gọi tải danh sách khi tải xong script
+setTimeout(refreshHfVoices, 500);

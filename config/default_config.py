@@ -91,6 +91,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "bind_tls": True,
         "public_url": "",
     },
+    "huggingface": {
+        "hf_token": "",                       # fallback sang translation.hf_token nếu rỗng
+        "tts_model": "facebook/mms-tts-vie",  # model mặc định (tiếng Việt)
+        "tts_speaker_embeddings": "",         # optional, đường dẫn local
+        "device": "cpu",                      # hoặc "cuda"
+    },
     "video_process": {
         "enabled": True,
         "model": "small",
@@ -114,30 +120,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "font_size": 18,
         "blur_height": 15,
         "subtitle_format": "ass",
-        "subtitle_position": "bottom",
-            "margin_v": 20,
-            "anti_fingerprint": {
-            "enabled": True,
-            "overlay_image": "",
-            "overlay_opacity": 0.02,
-            "logo_enabled": False,
-            "logo_image": "",
-            "logo_position": "bottom-left",
-            "logo_max_width_pct": 0.10,
-            "logo_opacity": 1.0,
-            "logo_padding": 10,
-        },
+        "max_words_per_segment": 5,  # Số từ tối đa trong 1 câu (cho tiếng Việt/Anh, 0 = không giới hạn)
+        "max_chars_per_segment": 15,  # Số ký tự tối đa trong 1 câu (cho tiếng Trung, ưu tiên hơn max_words, 0 = không giới hạn)
     },
-}
-
-DEFAULT_ANTI_FINGERPRINT = {
-    "enabled": True,
-    "overlay_image": "",
-    "overlay_opacity": 0.02,
-    "logo_enabled": False,
-    "logo_image": "",
-    "logo_position": "bottom-left",
-    "logo_max_width_pct": 0.15,
-    "logo_opacity": 1.0,
-    "logo_padding": 10,
+    "capcut": {
+        "enabled": False,
+        "auto_import": False,
+        "capcut_path": "",
+        "auto_open": False,
+    },
 }

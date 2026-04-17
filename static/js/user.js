@@ -1,9 +1,13 @@
 /* ── User search page ────────────────────────────────────────────────────── */
 let _userVideos = [], _userPage = 1, _userPageSize = 20;
 let _userHasMore = false, _userNextCursor = 0, _userSecUid = '';
+let _userAwemeCount = 0; // tổng số video thật từ profile
+let _userLoadedOffset = 0; // offset dùng khi cursor=0 (Douyin chặn pagination)
 let _selectedIds = new Set();
 let _queuedAwemeIds = new Set();
 let _viEnabled = true;
+let _isLoadingVideos = false; // tránh dịch khi đang load video
+let _translateDebounceTimer = null;
 let _viCache = {};
 let _translationScopeUrl = '';
 let _translationProvider = 'auto';
@@ -173,22 +177,71 @@ function _isAwemeInQueue(awemeId) {
   return _queuedAwemeIds.has(String(awemeId || ''));
 }
 
+function _toBool(value) {
+  if (typeof value === 'string') {
+    const v = value.trim().toLowerCase();
+    return v === '1' || v === 'true' || v === 'yes';
+  }
+  if (typeof value === 'number') return value !== 0;
+  return !!value;
+}
+
+function _toCursor(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
 async function _fetchUserVideosPage(cursor, count) {
   const url = document.getElementById('user-url')?.value.trim();
   if (!url) return null;
-  const res = await API.post('/api/user_videos_page', { url, cursor, count });
+  // Gửi offset (số video đã load từ server) để server bỏ qua khi cursor=0
+  const offset = cursor === 0 ? (_userLoadedOffset || _userVideos.length) : 0;
+  const res = await API.post('/api/user_videos_page', { url, cursor, count, offset });
   if (res?.error) throw new Error(res.error);
   return res;
 }
 
 async function _appendMoreVideos(cursor, count, renderCurrent = false) {
-  const res = await _fetchUserVideosPage(cursor, count);
+  _isLoadingVideos = true;
+  const res = await _fetchUserVideosPage(cursor, count).finally(() => { _isLoadingVideos = false; });
   if (!res) return null;
-  _userVideos = _userVideos.concat(res.videos || []);
-  _userHasMore = res.has_more;
-  _userNextCursor = res.next_cursor;
+
+  const beforeLen = _userVideos.length;
+  const merged = _userVideos.concat(res.videos || []);
+  const dedup = [];
+  const seen = new Set();
+  for (const item of merged) {
+    const key = String(item?.aweme_id || '');
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    dedup.push(item);
+  }
+  _userVideos = dedup;
+
+  _userHasMore = _toBool(res.has_more);
+  _userNextCursor = _toCursor(res.next_cursor);
+  // Nếu server trả offset, lưu lại để dùng cho lần load tiếp
+  if (res.offset !== undefined) _userLoadedOffset = res.offset;
+
+  // Nếu API không trả thêm item mới và cursor không tiến → API bị chặn
+  if (_userVideos.length === beforeLen && (!_userNextCursor || _userNextCursor === cursor)) {
+    _userHasMore = false;
+    if (_userAwemeCount > 0 && _userVideos.length < _userAwemeCount) {
+      toast('API Douyin bị chặn phân trang. Hãy dùng Download để lấy đủ video (có browser fallback).', 'warning');
+    }
+  }
+
+  // Nếu aweme_count cho thấy còn video và cursor đã tiến → tiếp tục
+  if (!_userHasMore && _userNextCursor && _userNextCursor !== cursor
+      && _userAwemeCount > 0 && _userVideos.length < _userAwemeCount) {
+    _userHasMore = true;
+  }
+
   const statusEl = document.getElementById('load-status');
-  if (statusEl) statusEl.textContent = _userVideos.length + ' video' + (_userHasMore ? ' (còn nữa)' : '');
+  if (statusEl) {
+    const total = _userAwemeCount > 0 ? _userAwemeCount : '?';
+    statusEl.textContent = _userVideos.length + '/' + total + ' video' + (_userHasMore ? ' (còn nữa)' : '');
+  }
   if (renderCurrent) _renderVideos();
   return res;
 }
@@ -388,22 +441,22 @@ async function _ensureItemsTranslatedForQueue(items) {
 }
 
 function goPrev() {
-  if (_userPage > 1) { _userPage--; _renderVideos(); if (_viEnabled) _translateVisible(); }
+  if (_userPage > 1) { _userPage--; _renderVideos(); if (_viEnabled) _translateVisibleDebounced(); }
 }
 
 async function goNext() {
   const list = _applyFilters();
   const totalPages = Math.ceil(list.length / _userPageSize);
   if (_userPage < totalPages) {
-    _userPage++; _renderVideos(); if (_viEnabled) _translateVisible(); return;
+    _userPage++; _renderVideos(); if (_viEnabled) _translateVisibleDebounced(); return;
   }
-  if (_userHasMore && _userSecUid) {
+  if (_userHasMore) {
     await _ensurePageLoaded(_userPage + 1);
     const refreshed = _applyFilters();
     const refreshedPages = Math.max(1, Math.ceil(refreshed.length / _userPageSize));
     if (_userPage < refreshedPages) _userPage++;
     _renderVideos();
-    if (_viEnabled) _translateVisible();
+    if (_viEnabled) _translateVisibleDebounced(1200); // chờ lâu hơn sau khi load video mới
   }
 }
 
@@ -421,13 +474,13 @@ async function goToPage(pageNumber) {
   const clamped = Math.min(target, totalPages);
 
   if (clamped === _userPage) {
-    if (_viEnabled) _translateVisible();
+    if (_viEnabled) _translateVisibleDebounced();
     return;
   }
 
   _userPage = Math.min(clamped, Math.max(1, Math.ceil(_applyFilters().length / _userPageSize)));
   _renderVideos();
-  if (_viEnabled) _translateVisible();
+  if (_viEnabled) _translateVisibleDebounced();
 }
 
 async function _loadMoreVideos() {
@@ -483,23 +536,39 @@ async function searchUser() {
     document.getElementById('user-result')?.classList.remove('hidden');
     document.getElementById('user-videos-section')?.classList.remove('hidden');
 
-    // Load videos
+    // Load videos - server đã trả hết tất cả video 1 lần
     _userVideos = info.videos || [];
-    _userHasMore = info.has_more;
-    _userNextCursor = info.next_cursor;
+    _userHasMore = false;
+    _userNextCursor = 0;
     _userSecUid = info.sec_uid;
+    _userAwemeCount = parseInt(info.aweme_count) || _userVideos.length;
+    _userLoadedOffset = _userVideos.length;
     _userPage = 1;
     _selectedIds.clear();
 
     const statusEl = document.getElementById('load-status');
-    if (statusEl) statusEl.textContent = _userVideos.length + ' video' + (_userHasMore ? ' (còn nữa)' : '');
+    const fetched = info.fetched_count ?? _userVideos.length;
+    const total = info.aweme_count || fetched;
+    if (statusEl) {
+      if (info.pagination_blocked && fetched < total) {
+        statusEl.textContent = fetched + '/' + total + ' video (Douyin giới hạn API - dùng Download để lấy hết)';
+        statusEl.style.color = 'var(--yellow, #f5a623)';
+      } else {
+        statusEl.textContent = fetched + ' video';
+        statusEl.style.color = '';
+      }
+    }
+
+    // Ẩn nút "Tải tất cả" vì đã load hết
+    const btnLoadAll = document.getElementById('btn-load-all');
+    if (btnLoadAll) btnLoadAll.style.display = 'none';
 
     _renderVideos();
 
     _translateUserProfileAsync(info, currentProvider, nameViEl, sigViEl);
 
     // Auto-translate if VI toggle is on
-    if (_viEnabled) _translateVisible();
+    if (_viEnabled) _translateVisibleDebounced(500);
   } catch (e) {
     toast('Error: ' + e.message, 'error');
   } finally {
@@ -508,6 +577,9 @@ async function searchUser() {
 }
 
 async function _translateVisible() {
+  // Không dịch khi đang load video để tránh 2 request nặng song song
+  if (_isLoadingVideos) return;
+
   const list = _applyFilters();
   const start = (_userPage - 1) * _userPageSize;
   const page = list.slice(start, start + _userPageSize);
@@ -556,6 +628,15 @@ async function _translateVisible() {
   _renderVideos();
 }
 
+// Debounced translate: chờ 800ms sau lần gọi cuối để tránh spam request
+function _translateVisibleDebounced(delay = 800) {
+  if (_translateDebounceTimer) clearTimeout(_translateDebounceTimer);
+  _translateDebounceTimer = setTimeout(() => {
+    _translateDebounceTimer = null;
+    if (_viEnabled && !_isLoadingVideos) _translateVisible();
+  }, delay);
+}
+
 async function retranslateAll() {
   if (!confirm(t('lbl_retranslate_confirm'))) return;
   _clearTranslationCache();
@@ -573,13 +654,13 @@ function _initUserPageListeners() {
   document.getElementById('toggle-vi')?.addEventListener('change', e => {
     _viEnabled = e.target.checked;
     _renderVideos();
-    if (_viEnabled) _translateVisible();
+    if (_viEnabled) _translateVisibleDebounced();
   });
   document.getElementById('provider-select')?.addEventListener('change', () => {
     const scopeUrl = document.getElementById('user-url')?.value.trim() || _translationScopeUrl;
     _setTranslationContext(scopeUrl, document.getElementById('provider-select')?.value || 'auto');
     _renderVideos();
-    if (_viEnabled) _translateVisible();
+    if (_viEnabled) _translateVisibleDebounced();
   });
 
   document.getElementById('page-jump')?.addEventListener('keydown', e => {
@@ -611,5 +692,75 @@ async function _loadTranslationStatus() {
   } catch (e) {
     const badge = document.getElementById('current-provider-badge');
     if (badge) badge.innerHTML = '<span class="dot dot-yellow"></span>Google Translate';
+  }
+}
+
+// Tải tất cả video dùng stream endpoint (bypass pagination limit)
+async function loadAllVideos() {
+  const url = document.getElementById('user-url')?.value.trim();
+  if (!url) return;
+
+  const btn = document.getElementById('btn-load-all');
+  const statusEl = document.getElementById('load-status');
+  if (btn) btn.disabled = true;
+
+  _isLoadingVideos = true;
+  const seen = new Set(_userVideos.map(v => String(v.aweme_id)));
+
+  try {
+    const response = await fetch('/api/user_videos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url })
+    });
+
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop(); // giữ lại dòng chưa hoàn chỉnh
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const chunk = JSON.parse(trimmed);
+          if (chunk.error) { toast('Lỗi: ' + chunk.error, 'error'); break; }
+          for (const v of (chunk.videos || [])) {
+            const key = String(v.aweme_id);
+            if (key && !seen.has(key)) {
+              seen.add(key);
+              _userVideos.push(v);
+            }
+          }
+          if (statusEl) {
+            const total = _userAwemeCount > 0 ? _userAwemeCount : '?';
+            statusEl.textContent = _userVideos.length + '/' + total + ' video' + (chunk.has_more ? ' (đang tải...)' : '');
+          }
+          _renderVideos();
+        } catch (_) {}
+      }
+    }
+
+    _userHasMore = false;
+    if (btn) btn.style.display = 'none';
+    if (statusEl) {
+      const total = _userAwemeCount > 0 ? _userAwemeCount : _userVideos.length;
+      statusEl.textContent = _userVideos.length + '/' + total + ' video';
+    }
+    _renderVideos();
+    if (_viEnabled) _translateVisibleDebounced(1000);
+  } catch (e) {
+    toast('Lỗi tải video: ' + e.message, 'error');
+  } finally {
+    _isLoadingVideos = false;
+    if (btn) btn.disabled = false;
   }
 }

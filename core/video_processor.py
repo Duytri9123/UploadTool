@@ -264,27 +264,27 @@ def _build_anti_fingerprint_filter(
     base_in = "[cg_base]" if color_grade else "[0:v]"
 
     if has_overlay and not has_logo:
-        # Scale overlay về đúng kích thước video
-        # [1:v] = overlay, {base_in} = video → scale2ref giúp scale overlay khớp kích thước video
+        # Scale overlay về đúng kích thước video (KHÔNG split nếu không cần)
         fc = (
             f"{cg_prefix}"
-            f"[1:v]{base_in}scale2ref[ov_sized][base_ref];"
+            f"{base_in}[vref];"
+            f"[1:v][vref]scale2ref[ov_sized][base_ref];"
             f"[ov_sized]format=rgba,colorchannelmixer=aa={overlay_opacity}[ov_alpha];"
             f"[base_ref][ov_alpha]overlay=0:0[vout]"
         )
     elif has_logo and not has_overlay:
-        # [1:v] = logo, {base_in} = video → scale2ref dùng video làm reference để tính kích thước logo
         fc = (
             f"{cg_prefix}"
-            f"[1:v]{base_in}scale2ref=w=oh*mdar:h=iw*{logo_max_width_pct}[logo_scaled][base_ref];"
+            f"{base_in}[base];"
+            f"[1:v]scale2ref=w=oh*mdar:h=iw*{logo_max_width_pct}[logo_scaled][base_ref];"
             f"[logo_scaled]format=rgba,colorchannelmixer=aa={logo_opacity}[logo_alpha];"
             f"[base_ref][logo_alpha]overlay={logo_x}:{logo_y}[vout]"
         )
     elif has_overlay and has_logo:
-        # Overlay trước, rồi ghép logo lên trên
         fc = (
             f"{cg_prefix}"
-            f"[1:v]{base_in}scale2ref[ov_sized][base_ref];"
+            f"{base_in}split[base][vref];"
+            f"[1:v][vref]scale2ref[ov_sized][base_ref];"
             f"[ov_sized]format=rgba,colorchannelmixer=aa={overlay_opacity}[ov_alpha];"
             f"[base_ref][ov_alpha]overlay=0:0[with_ov];"
             f"[2:v][with_ov]scale2ref=w=oh*mdar:h=iw*{logo_max_width_pct}[logo_scaled][base2];"
@@ -292,8 +292,8 @@ def _build_anti_fingerprint_filter(
             f"[base2][logo_alpha]overlay={logo_x}:{logo_y}[vout]"
         )
     else:
-        # Chỉ color grade, không overlay/logo — dùng null filter để pass-through
-        fc = f"{cg_prefix}{base_in}null[vout]" if color_grade else ""
+        # Chỉ color grade, không overlay/logo
+        fc = f"{cg_prefix}{base_in}copy[vout]" if color_grade else ""
 
     return fc, ["[vout]"]
 
@@ -1780,99 +1780,97 @@ def process_video_full(data: dict) -> Generator[str, None, None]:
                 else:
                     return
 
-    # ── Step 2: Translate ZH → VI ─────────────────────────────────────────────
+
+    # Step 2: Translate ZH → VI
     translated_texts = []
-    # Resume: nếu vi.ass đã có → load lại segments và translated_texts từ đó
-    if vi_ass_path_cached.exists() and vi_ass_path_cached.stat().st_size > 0 and segments:
-        try:
-            cached_vi_segs = _parse_srt(vi_ass_path_cached) if vi_ass_path_cached.suffix == ".srt" else []
-            # Parse ASS để lấy text
-            if not cached_vi_segs:
-                raw = vi_ass_path_cached.read_text(encoding="utf-8", errors="replace")
-                cached_vi_segs = []
-                for line in raw.splitlines():
-                    if line.startswith("Dialogue:"):
-                        parts = line.split(",", 9)
-                        if len(parts) >= 10:
-                            t_start = parts[1].strip(); t_end = parts[2].strip()
-                            def _ass_to_sec(t):
-                                h, m, s = t.split(":")
-                                return int(h)*3600 + int(m)*60 + float(s)
-                            cached_vi_segs.append({"start": _ass_to_sec(t_start), "end": _ass_to_sec(t_end), "text": parts[9].replace("\\N", "\n")})
-            if cached_vi_segs:
-                translated_texts = [s["text"] for s in cached_vi_segs]
-                vi_ass_path = vi_ass_path_cached
-                srt_path = vi_ass_path
-                yield send(log=f"[Bước 2/5] ♻ Dùng lại bản dịch cũ ({len(translated_texts)} đoạn): {vi_ass_path_cached.name}", level="info")
-                yield send(overall=55, overall_lbl="Dùng lại bản dịch cũ")
-        except Exception:
-            translated_texts = []
-
-    if not translated_texts and (do_translate or do_voice) and segments:
-        n_segs = len(segments)
-        batch_sz = 30
-        n_batches = (n_segs + batch_sz - 1) // batch_sz
-        yield send(log=f"[Bước 2/5] Dịch {n_segs} đoạn sang tiếng Việt ({n_batches} batch)...", level="info")
-        yield send(overall=45, overall_lbl=f"Đang dịch {n_segs} đoạn...")
-        try:
-            from utils.translation import BatchTranslator
-            trans_cfg = cfg_raw.get("translation", {})
-            if not trans_cfg.get("groq_key"):
-                trans_cfg["groq_key"] = (
-                    str(data.get("groq_api_key") or "").strip()
-                    or os.getenv("GROQ_API_KEY", "").strip()
-                    or str(tr_cfg.get("groq_api_key") or "").strip()
-                )
-            if not trans_cfg.get("groq_model"):
-                trans_cfg["groq_model"] = (
-                    str(data.get("groq_model") or "").strip()
-                    or str(tr_cfg.get("groq_model") or "").strip()
-                    or "llama-3.1-8b-instant"
-                )
-            req_provider = str(data.get("translate_provider") or "").strip().lower()
-            cfg_provider = str(trans_cfg.get("preferred_provider") or "").strip().lower()
-            # Treat "auto" as unspecified so config/provider key can decide deterministically.
-            if req_provider == "auto":
-                req_provider = ""
-            if cfg_provider == "auto":
-                cfg_provider = ""
-            provider = req_provider or cfg_provider or ("deepseek" if trans_cfg.get("deepseek_key") else "auto")
-            texts = [seg.get("text", "").strip() for seg in segments]
-            has_ds = bool(trans_cfg.get("deepseek_key"))
-            has_groq = bool(trans_cfg.get("groq_key"))
-            groq_model_name = trans_cfg.get("groq_model") or "llama-3.1-8b-instant"
-            _provider_info = []
-            if has_ds:   _provider_info.append("deepseek-chat ✓")
-            if has_groq: _provider_info.append(f"{groq_model_name} ✓")
-            if not _provider_info: _provider_info.append("google translate (fallback)")
-            yield send(log=f"[Bước 2/5] Dịch bằng: {' | '.join(_provider_info)} — ưu tiên: {provider}", level="info")
-            translator = BatchTranslator(trans_cfg)
-            translated_texts, used = translator.translate(texts, provider)
-            _used_model = groq_model_name if used == "groq" else ("deepseek-chat" if used == "deepseek" else used)
-            yield send(log=f"[Bước 2/5] ✓ Dịch xong {len(translated_texts)} đoạn — dùng: {_used_model}", level="success")
-            yield send(overall=55, overall_lbl="Dịch xong")
-
-            if translated_texts:
-                # Luôn dùng ASS — không dùng SRT
-                alignment = 8 if str(data.get("subtitle_position", "bottom")).lower() == "top" else 2
-                vi_ass_path = out_dir / f"{stem}_vi.ass"
-                vi_segs = [{"start": s["start"], "end": s["end"], "text": t}
-                           for s, t in zip(segments, translated_texts) if t]
-                write_ass(vi_segs, vi_ass_path,
-                          font_size=_as_int(data.get("font_size", 32), 32),
-                          font_color=data.get("font_color", "white"),
-                          outline_color=data.get("outline_color", "black"),
-                          outline_width=_as_int(data.get("outline_width", 2), 2),
-                          margin_v=effective_margin_v,
-                          alignment=alignment)
-                yield send(log=f"[Bước 2/5] ✓ ASS tiếng Việt: {vi_ass_path.name}", level="success")
-
-                if do_burn and do_burn_vi:
+    if not do_translate:
+        yield send(log="[Bước 2/5] Bỏ qua dịch phụ đề vì đã tắt translate_subs", level="info")
+    else:
+        # Resume: nếu vi.ass đã có → load lại segments và translated_texts từ đó
+        if vi_ass_path_cached.exists() and vi_ass_path_cached.stat().st_size > 0 and segments:
+            try:
+                cached_vi_segs = _parse_srt(vi_ass_path_cached) if vi_ass_path_cached.suffix == ".srt" else []
+                # Parse ASS để lấy text
+                if not cached_vi_segs:
+                    raw = vi_ass_path_cached.read_text(encoding="utf-8", errors="replace")
+                    cached_vi_segs = []
+                    for line in raw.splitlines():
+                        if line.startswith("Dialogue:"):
+                            parts = line.split(",", 9)
+                            if len(parts) >= 10:
+                                t_start = parts[1].strip(); t_end = parts[2].strip()
+                                def _ass_to_sec(t):
+                                    h, m, s = t.split(":")
+                                    return int(h)*3600 + int(m)*60 + float(s)
+                                cached_vi_segs.append({"start": _ass_to_sec(t_start), "end": _ass_to_sec(t_end), "text": parts[9].replace("\\N", "\n")})
+                if cached_vi_segs:
+                    translated_texts = [s["text"] for s in cached_vi_segs]
+                    vi_ass_path = vi_ass_path_cached
                     srt_path = vi_ass_path
-                    yield send(log=f"[Bước 2/5] Sẽ burn: {srt_path.name}", level="info")
-        except Exception as e:
-            yield send(log=f"[Bước 2/5] ✗ Dịch thất bại: {e}", level="error")
-            translated_texts = []
+                    yield send(log=f"[Bước 2/5] ♻ Dùng lại bản dịch cũ ({len(translated_texts)} đoạn): {vi_ass_path_cached.name}", level="info")
+                    yield send(overall=55, overall_lbl="Dùng lại bản dịch cũ")
+            except Exception:
+                translated_texts = []
+
+        if not translated_texts and segments:
+            n_segs = len(segments)
+            batch_sz = 30
+            n_batches = (n_segs + batch_sz - 1) // batch_sz
+            yield send(log=f"[Bước 2/5] Dịch {n_segs} đoạn sang tiếng Việt ({n_batches} batch)...", level="info")
+            yield send(overall=45, overall_lbl=f"Đang dịch {n_segs} đoạn...")
+            try:
+                from utils.translation import BatchTranslator
+                trans_cfg = cfg_raw.get("translation", {})
+                if not trans_cfg.get("groq_key"):
+                    trans_cfg["groq_key"] = (
+                        str(data.get("groq_api_key") or "").strip()
+                        or os.getenv("GROQ_API_KEY", "").strip()
+                        or str(tr_cfg.get("groq_api_key") or "").strip()
+                    )
+                if not trans_cfg.get("groq_model"):
+                    trans_cfg["groq_model"] = (
+                        str(data.get("groq_model") or "").strip()
+                        or str(tr_cfg.get("groq_model") or "").strip()
+                        or "llama-3.1-8b-instant"
+                    )
+                req_provider = str(data.get("translate_provider") or "").strip().lower()
+                cfg_provider = str(trans_cfg.get("preferred_provider") or "").strip().lower()
+                # Treat "auto" as unspecified so config/provider key can decide deterministically.
+                if req_provider == "auto":
+                    req_provider = ""
+                if cfg_provider == "auto":
+                    cfg_provider = ""
+                provider = req_provider or cfg_provider or ("deepseek" if trans_cfg.get("deepseek_key") else "auto")
+                texts = [seg.get("text", "").strip() for seg in segments]
+                has_ds = bool(trans_cfg.get("deepseek_key"))
+                has_groq = bool(trans_cfg.get("groq_key"))
+                yield send(log=f"[Bước 2/5] Provider: {provider} | deepseek={'✓' if has_ds else '✗'} | groq={'✓' if has_groq else '✗'}", level="info")
+                translator = BatchTranslator(trans_cfg)
+                translated_texts, used = translator.translate(texts, provider)
+                yield send(log=f"[Bước 2/5] ✓ Dịch xong {len(translated_texts)} đoạn (provider: {used})", level="success")
+                yield send(overall=55, overall_lbl="Dịch xong")
+
+                if translated_texts:
+                    # Luôn dùng ASS — không dùng SRT
+                    alignment = 8 if str(data.get("subtitle_position", "bottom")).lower() == "top" else 2
+                    vi_ass_path = out_dir / f"{stem}_vi.ass"
+                    vi_segs = [{"start": s["start"], "end": s["end"], "text": t}
+                               for s, t in zip(segments, translated_texts) if t]
+                    write_ass(vi_segs, vi_ass_path,
+                              font_size=_as_int(data.get("font_size", 32), 32),
+                              font_color=data.get("font_color", "white"),
+                              outline_color=data.get("outline_color", "black"),
+                              outline_width=_as_int(data.get("outline_width", 2), 2),
+                              margin_v=effective_margin_v,
+                              alignment=alignment)
+                    yield send(log=f"[Bước 2/5] ✓ ASS tiếng Việt: {vi_ass_path.name}", level="success")
+
+                    if do_burn and do_burn_vi:
+                        srt_path = vi_ass_path
+                        yield send(log=f"[Bước 2/5] Sẽ burn: {srt_path.name}", level="info")
+            except Exception as e:
+                yield send(log=f"[Bước 2/5] ✗ Dịch thất bại: {e}", level="error")
+                translated_texts = []
 
     # ── Step 3: Burn subtitles ────────────────────────────────────────────────
     burned_path = None
@@ -2201,84 +2199,4 @@ def preview_subtitles_in_video(
 
     if ok and output_path.exists():
         return True, f"Preview created: {output_path}"
-    return False, err
-
-
-def make_vertical_video(
-    video_path: Path,
-    output_path: Path,
-    ffmpeg: str,
-    target_w: int = 1080,
-    target_h: int = 1920,
-    blur_height_pct: float = 0.18,
-    blur_strength: int = 40,
-    shadow_opacity: float = 0.55,
-) -> tuple[bool, str]:
-    """
-    Chuyển video ngang → video dọc 9:16 với 2 lớp mờ gradient đổ bóng trên/dưới.
-
-    Pipeline:
-      1. [bg]   Nền blur: scale fill toàn khung 9:16 rồi boxblur mạnh.
-      2. [fg]   Video gốc: scale vừa chiều rộng target_w, giữ tỉ lệ.
-      3. [comp] Overlay fg lên bg, căn giữa dọc.
-      4. [out]  Dùng geq tạo 2 lớp gradient đen mờ dần (fade) trên/dưới.
-    """
-    video_path = Path(video_path)
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    if not video_path.exists():
-        return False, f"File không tồn tại: {video_path}"
-
-    tw, th = target_w, target_h
-    grad_h = int(th * max(0.05, min(0.45, blur_height_pct)))
-    alpha = max(0.0, min(1.0, shadow_opacity))
-    # alpha → 0..255
-    a255 = int(alpha * 255)
-
-    # Gradient fade trên: y=0 đậm nhất → y=grad_h trong suốt
-    # Gradient fade dưới: y=th-grad_h trong suốt → y=th đậm nhất
-    # geq: luma=val(X,Y), alpha channel = gradient
-    # Dùng 2 lớp overlay màu đen với alpha gradient qua geq+format=rgba
-    top_geq    = f"geq=r=0:g=0:b=0:a='{a255}*(1-Y/{grad_h})'"
-    bottom_geq = f"geq=r=0:g=0:b=0:a='{a255}*((Y-({th}-{grad_h}))/{grad_h})'"
-
-    filter_complex = (
-        # nền blur fill 9:16
-        f"[0:v]scale={tw}:{th}:force_original_aspect_ratio=increase,"
-        f"crop={tw}:{th},"
-        f"boxblur=luma_radius={blur_strength}:luma_power=3[bg];"
-
-        # video gốc scale vừa width, giữ tỉ lệ
-        f"[0:v]scale={tw}:-2[fg_scaled];"
-
-        # overlay fg lên bg căn giữa dọc
-        f"[bg][fg_scaled]overlay=(W-w)/2:(H-h)/2[comp];"
-
-        # tạo lớp gradient trên (grad_h x tw, rgba)
-        f"[comp]split[comp1][comp2];"
-        f"[comp1]crop={tw}:{grad_h}:0:0,"
-        f"{top_geq}[top_grad];"
-        f"[comp2][top_grad]overlay=0:0[with_top];"
-
-        # tạo lớp gradient dưới
-        f"[with_top]split[wt1][wt2];"
-        f"[wt1]crop={tw}:{grad_h}:0:{th - grad_h},"
-        f"{bottom_geq}[bot_grad];"
-        f"[wt2][bot_grad]overlay=0:{th - grad_h}[out]"
-    )
-
-    cmd = [
-        ffmpeg, "-i", str(video_path),
-        "-filter_complex", filter_complex,
-        "-map", "[out]", "-map", "0:a?",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
-        "-c:a", "copy",
-        "-movflags", "+faststart",
-        str(output_path), "-y", "-loglevel", "error",
-    ]
-
-    ok, err = run_ffmpeg(cmd)
-    if ok and output_path.exists():
-        return True, ""
     return False, err

@@ -115,41 +115,35 @@ async function loadConfig() {
   const pitchVal = parseFloat(document.getElementById('vp-tts-pitch')?.value || '0');
   if (document.getElementById('vp-tts-pitch-val')) document.getElementById('vp-tts-pitch-val').textContent = (pitchVal > 0 ? '+' : '') + pitchVal.toFixed(1) + ' st';
   set('vp-font-size', cfg.video_process?.font_size ?? 22);
-  set('vp-subtitle-position', cfg.video_process?.subtitle_position || 'bottom');
-  set('vp-margin-v', cfg.video_process?.margin_v ?? 20);
+  set('vp-tts-engine', cfg.video_process?.tts_engine || 'edge-tts');
+  set('vp-bg-volume', cfg.video_process?.bg_volume ?? 0.15);
+  set('vp-tts-pitch', cfg.video_process?.tts_pitch || '+0Hz');
+  set('vp-tts-rate', cfg.video_process?.tts_rate || '+0%');
+  set('vp-tts-emotion', cfg.video_process?.tts_emotion || 'default');
 
-  const af = cfg.video_process?.anti_fingerprint || {};
-  setChk('cfg-anti-fingerprint-enabled', af.enabled !== false);
-  set('cfg-overlay-image-path', af.overlay_image || '');
-  set('cfg-overlay-opacity', af.overlay_opacity ?? 0.02);
-  setChk('cfg-logo-enabled', af.logo_enabled === true);
-  set('cfg-logo-image-path', af.logo_image || '');
-  set('cfg-logo-position', af.logo_position || 'bottom-left');
-  set('cfg-logo-opacity', af.logo_opacity ?? 1.0);
-  // Color grading
-  const brightness = af.brightness ?? 0.02;
-  const contrast   = af.contrast   ?? 1.03;
-  const saturation = af.saturation ?? 1.05;
-  const sharpness  = af.sharpness  ?? 0.5;
-  set('cfg-brightness', brightness);
-  set('cfg-contrast',   contrast);
-  set('cfg-saturation', saturation);
-  set('cfg-sharpness',  sharpness);
-  set('cfg-scale-w', af.scale_w ?? 0);
-  set('cfg-scale-h', af.scale_h ?? 0);
-  const bEl = document.getElementById('cfg-brightness-val');  if (bEl) bEl.textContent = (brightness > 0 ? '+' : '') + parseFloat(brightness).toFixed(2);
-  const cEl = document.getElementById('cfg-contrast-val');    if (cEl) cEl.textContent = parseFloat(contrast).toFixed(2);
-  const sEl = document.getElementById('cfg-saturation-val');  if (sEl) sEl.textContent = parseFloat(saturation).toFixed(2);
-  const shEl = document.getElementById('cfg-sharpness-val');  if (shEl) shEl.textContent = parseFloat(sharpness).toFixed(1);
-  // Transform
-  const cropPct = af.crop_pct ?? 0.03;
-  const speed   = af.speed    ?? 1.0;
-  set('cfg-crop-pct', cropPct);
-  set('cfg-speed', speed);
-  setChk('cfg-flip-h', af.flip_h === true);
-  setChk('cfg-vignette', af.vignette !== false);
-  const cpEl = document.getElementById('cfg-crop-pct-val'); if (cpEl) cpEl.textContent = Math.round(cropPct * 100) + '%';
-  const spEl = document.getElementById('cfg-speed-val');    if (spEl) spEl.textContent = parseFloat(speed).toFixed(2) + 'x';
+  const hfCfg = cfg.huggingface || {};
+  set('vp-hf-model', hfCfg.tts_model || 'facebook/mms-tts-vie');
+  set('vp-hf-device', hfCfg.device || 'cpu');
+  set('vp-hf-embeddings', hfCfg.tts_speaker_embeddings || '');
+  if ((cfg.video_process?.tts_engine || 'edge-tts') === 'huggingface') {
+    const el = document.getElementById('vp-hf-config');
+    if (el) el.style.display = 'block';
+  }
+  
+  const afp = cfg.video_process?.anti_fingerprint || {};
+  setChk('vp-afp-enabled', afp.enabled === true);
+  setChk('vp-afp-flip', afp.flip_h === true);
+  setChk('vp-afp-vignette', afp.vignette === true);
+  setChk('vp-afp-vertical', afp.vertical === true);
+  set('vp-afp-scale-w', afp.scale_w || 0);
+  set('vp-afp-scale-h', afp.scale_h || 0);
+  set('vp-afp-overlay-img', afp.overlay_image || '');
+  set('vp-afp-brightness', afp.brightness || 0.02);
+  set('vp-afp-contrast', afp.contrast || 1.03);
+  
+  if (typeof syncProcessConfigFromLoaded === 'function') {
+    syncProcessConfigFromLoaded();
+  }
 }
 
 async function saveConfig() {
@@ -204,6 +198,11 @@ async function saveConfig() {
         privacy_status: get('cfg-tt-privacy') || 'private',
       },
     },
+    huggingface: {
+      tts_model: get('vp-hf-model') || 'facebook/mms-tts-vie',
+      device: get('vp-hf-device') || 'cpu',
+      tts_speaker_embeddings: get('vp-hf-embeddings') || '',
+    },
     video_process: {
       enabled: getChk('vp-enabled'),
       model: get('vp-model'),
@@ -223,18 +222,23 @@ async function saveConfig() {
       auto_speed: getChk('vp-auto-speed'),
       pitch_semitones: parseFloat(get('vp-tts-pitch')) || 0.0,
       font_size: parseInt(get('vp-font-size')) || 22,
-      subtitle_position: get('vp-subtitle-position') || 'bottom',
-      margin_v: parseInt(get('vp-margin-v')) || 20,
+      tts_engine: get('vp-tts-engine') || 'edge-tts',
+      bg_volume: parseFloat(get('vp-bg-volume')) || 0.15,
+      tts_pitch: get('vp-tts-pitch') || '+0Hz',
+      tts_rate: get('vp-tts-rate') || '+0%',
+      tts_emotion: get('vp-tts-emotion') || 'default',
       subtitle_format: 'ass',
       anti_fingerprint: {
-        enabled: getChk('cfg-anti-fingerprint-enabled'),
-        overlay_image: get('cfg-overlay-image-path'),
-        overlay_opacity: parseFloat(get('cfg-overlay-opacity') || '0.02'),
-        logo_enabled: getChk('cfg-logo-enabled'),
-        logo_image: get('cfg-logo-image-path'),
-        logo_position: get('cfg-logo-position') || 'bottom-left',
-        logo_opacity: parseFloat(get('cfg-logo-opacity') || '1.0'),
-      },
+        enabled: getChk('vp-afp-enabled'),
+        flip_h: getChk('vp-afp-flip'),
+        vignette: getChk('vp-afp-vignette'),
+        vertical: getChk('vp-afp-vertical'),
+        scale_w: parseInt(get('vp-afp-scale-w')) || 0,
+        scale_h: parseInt(get('vp-afp-scale-h')) || 0,
+        overlay_image: get('vp-afp-overlay-img') || '',
+        brightness: parseFloat(get('vp-afp-brightness')) || 0.02,
+        contrast: parseFloat(get('vp-afp-contrast')) || 1.03,
+      }
     }
   };
 

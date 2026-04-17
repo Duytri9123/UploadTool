@@ -686,6 +686,7 @@ def user_videos_page():
     url    = data.get("url","").strip()
     cursor = int(data.get("cursor", 0))
     count  = int(data.get("count", 20))
+    offset = int(data.get("offset", 0))  # số video đã có ở client, dùng khi cursor=0
     if not url:
         return jsonify({"error":"No URL"}), 400
 
@@ -722,13 +723,44 @@ def user_videos_page():
             return {"error": "Invalid user URL"}
         sec_uid = parsed.get("sec_uid","")
         async with DouyinAPIClient(cm.get_cookies(), proxy=config.get("proxy")) as api:
-            result = await api.get_user_post(sec_uid, max_cursor=cursor, count=count)
-            items  = result.get("items") or result.get("aweme_list") or []
-            return {
-                "videos":      parse_items(items),
-                "has_more":    result.get("has_more", False),
-                "next_cursor": result.get("max_cursor", 0),
-            }
+            # Nếu cursor=0 nhưng offset>0, cần loop qua các trang để bỏ qua offset video đầu
+            if cursor == 0 and offset > 0:
+                all_items = []
+                cur = 0
+                seen_ids = set()
+                # Loop tối đa 20 trang, dừng khi không còn item mới hoặc cursor không tiến
+                for _ in range(20):
+                    result = await api.get_user_post(sec_uid, max_cursor=cur, count=20)
+                    page_items = result.get("items") or result.get("aweme_list") or []
+                    added = 0
+                    for item in page_items:
+                        aid = item.get("aweme_id")
+                        if aid and aid not in seen_ids:
+                            seen_ids.add(aid)
+                            all_items.append(item)
+                            added += 1
+                    new_cursor = int(result.get("max_cursor", 0) or 0)
+                    # Dừng nếu: không có item mới, cursor không tiến, hoặc đã đủ
+                    if added == 0 or new_cursor == cur or len(all_items) >= offset + count:
+                        break
+                    cur = new_cursor
+                has_more_final = len(all_items) > offset + count
+                slice_items = all_items[offset:offset + count]
+                return {
+                    "videos":      parse_items(slice_items),
+                    "has_more":    has_more_final,
+                    "next_cursor": cur,
+                    "offset":      offset + len(slice_items),
+                }
+            else:
+                result = await api.get_user_post(sec_uid, max_cursor=cursor, count=count)
+                items  = result.get("items") or result.get("aweme_list") or []
+                return {
+                    "videos":      parse_items(items),
+                    "has_more":    result.get("has_more", False),
+                    "next_cursor": result.get("max_cursor", 0),
+                    "offset":      offset + len(items),
+                }
     try:
         return jsonify(asyncio.run(fetch()))
     except Exception as e:
@@ -894,7 +926,9 @@ def user_info():
     url = data.get("url","").strip()
     if not url:
         return jsonify({"error":"No URL"}), 400
+
     async def fetch():
+        import asyncio as _asyncio
         from config import ConfigLoader
         from auth import CookieManager
         from core import DouyinAPIClient, URLParser
@@ -902,59 +936,78 @@ def user_info():
         cm = CookieManager(); cm.set_cookies(get_cookies_with_fallback())
         parsed = URLParser.parse(url)
         if not parsed or parsed.get("type") != "user":
-            return None, None
+            return None, []
         sec_uid = parsed.get("sec_uid","")
         async with DouyinAPIClient(cm.get_cookies(), proxy=config.get("proxy")) as api:
             info = await api.get_user_info(sec_uid)
-            posts = await api.get_user_post(sec_uid, count=20)
-            return info, posts
+            if not info:
+                return None, []
+
+            # Lấy hết tất cả video: loop nhiều trang cho đến khi hết
+            all_items = []
+            seen_ids = set()
+            cursor = 0
+            pagination_blocked = False
+            for _ in range(200):  # tối đa 200 trang = 4000 video
+                result = await api.get_user_post(sec_uid, max_cursor=cursor, count=20)
+                page_items = result.get("items") or result.get("aweme_list") or []
+                added = 0
+                for item in page_items:
+                    aid = item.get("aweme_id")
+                    if aid and aid not in seen_ids:
+                        seen_ids.add(aid)
+                        all_items.append(item)
+                        added += 1
+                new_cursor = int(result.get("max_cursor", 0) or 0)
+                # Dừng khi không có item mới hoặc cursor không tiến
+                if added == 0 or new_cursor == cursor:
+                    if cursor > 0 and added == 0:
+                        pagination_blocked = True
+                    break
+                cursor = new_cursor
+                await _asyncio.sleep(0.3)  # delay nhỏ tránh rate limit
+
+            return info, all_items, pagination_blocked
+
+    def parse_item(item):
+        cover = _extract_cover(item)
+        ts = item.get("create_time", 0)
+        dt = datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else ""
+        return {
+            "aweme_id": item.get("aweme_id", ""),
+            "desc":     (item.get("desc", "") or "")[:80],
+            "cover":    cover,
+            "date":     dt,
+            "ts":       ts,
+            "play":     (item.get("statistics") or {}).get("play_count", 0),
+            "like":     (item.get("statistics") or {}).get("digg_count", 0),
+            "type":     "gallery" if item.get("images") else "video",
+            "duration": (item.get("video") or {}).get("duration", 0) or
+                        (item.get("video") or {}).get("video_duration", 0) or
+                        item.get("duration", 0) or 0,
+        }
+
     try:
-        info, posts = asyncio.run(fetch())
+        info, all_items, pagination_blocked = asyncio.run(fetch())
         if not info:
-            return jsonify({"error":"User not found or invalid URL"}), 404
+            return jsonify({"error": "User not found or invalid URL"}), 404
 
-        # parse video previews
-        videos = []
-        for item in (posts or {}).get("items", [])[:20]:
-            cover = ""
-            vc = item.get("video",{}).get("cover") or item.get("video",{}).get("origin_cover") or {}
-            urls = vc.get("url_list") or []
-            if urls: cover = urls[0]
-            # gallery fallback
-            if not cover:
-                imgs = item.get("images") or []
-                if imgs:
-                    ul = (imgs[0].get("url_list") or [])
-                    if ul: cover = ul[0]
-            ts = item.get("create_time",0)
-            dt = datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else ""
-            duration = (item.get("video") or {}).get("duration", 0) or \
-                       (item.get("video") or {}).get("video_duration", 0) or \
-                       item.get("duration", 0) or 0
-            videos.append({
-                "aweme_id": item.get("aweme_id",""),
-                "desc":     (item.get("desc","") or "")[:60],
-                "cover":    cover,
-                "date":     dt,
-                "ts":       ts,
-                "play":     item.get("statistics",{}).get("play_count",0),
-                "like":     item.get("statistics",{}).get("digg_count",0),
-                "type":     "gallery" if item.get("images") else "video",
-                "duration": duration,
-            })
-
+        videos = [parse_item(i) for i in all_items]
+        aweme_count = info.get("aweme_count", 0)
         return jsonify({
-            "nickname":    info.get("nickname",""),
-            "uid":         info.get("uid",""),
-            "sec_uid":     info.get("sec_uid",""),
-            "signature":   info.get("signature",""),
+            "nickname":    info.get("nickname", ""),
+            "uid":         info.get("uid", ""),
+            "sec_uid":     info.get("sec_uid", ""),
+            "signature":   info.get("signature", ""),
             "avatar":      ((info.get("avatar_thumb") or {}).get("url_list") or [""])[0],
-            "follower":    info.get("follower_count",0),
-            "following":   info.get("following_count",0),
-            "aweme_count": info.get("aweme_count",0),
+            "follower":    info.get("follower_count", 0),
+            "following":   info.get("following_count", 0),
+            "aweme_count": aweme_count,
             "videos":      videos,
-            "has_more":    posts.get("has_more", False),
-            "next_cursor": posts.get("max_cursor", 0),
+            "has_more":    False,
+            "next_cursor": 0,
+            "pagination_blocked": pagination_blocked,
+            "fetched_count": len(videos),
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1189,6 +1242,9 @@ def tts_preview():
     text = str(data.get("text") or "").strip()
     tts_engine = str(data.get("tts_engine") or "edge-tts").strip().lower()
     tts_voice = str(data.get("tts_voice") or "banmai").strip()
+    tts_pitch = str(data.get("tts_pitch") or "+0Hz").strip()
+    tts_rate  = str(data.get("tts_rate") or "+0%").strip()
+    tts_emotion = str(data.get("tts_emotion") or "default").strip()
 
     if not text:
         return jsonify({"ok": False, "error": "Text preview is empty"}), 400
@@ -1206,23 +1262,203 @@ def tts_preview():
         )
         fpt_speed = int(data.get("fpt_speed") or 0)
 
+        fx_enabled = bool(data.get("fx_enabled", False))
+        fx_params = {
+            "pitch":   float(data.get("fx_pitch",  1.5)),
+            "speed":   float(data.get("fx_speed",  1.08)),
+            "bass":    float(data.get("fx_bass",   -2)),
+            "mid":     float(data.get("fx_mid",    2)),
+            "treble":  float(data.get("fx_treble", 3)),
+            "comp":    str(data.get("fx_comp",     "none")),
+            "reverb":  float(data.get("fx_reverb", 0)),
+        }
+
         with tempfile.TemporaryDirectory(prefix="tts_preview_") as tmpdir:
             out_path = _Path(tmpdir) / "preview.mp3"
-            if tts_engine == "gtts":
-                ok = _tts_gtts(text, "vi", out_path)
-            elif tts_engine == "fpt-ai":
-                ok = asyncio.run(_tts_fpt_ai(text, tts_voice, out_path, fpt_api_key, fpt_speed))
-            else:
-                ok = asyncio.run(_tts_edge(text, tts_voice, out_path))
+            try:
+                if tts_engine == "gtts":
+                    ok = _tts_gtts(text, "vi", out_path)
+                elif tts_engine == "fpt-ai":
+                    ok = asyncio.run(_tts_fpt_ai(text, tts_voice, out_path, fpt_api_key, fpt_speed))
+                elif tts_engine == "minimax":
+                    from core.video_processor import _tts_minimax
+                    ok = asyncio.run(_tts_minimax(text, tts_voice, out_path))
+                elif tts_engine == "huggingface":
+                    from core.hf_tts import HuggingFaceTTS
+                    cfg = load_cfg()
+                    hf_cfg = cfg.get("huggingface") or {}
+                    tr_cfg = cfg.get("translation") or {}
+                    hf_token = (
+                        str(hf_cfg.get("hf_token") or "").strip()
+                        or str(tr_cfg.get("hf_token") or "").strip()
+                        or os.getenv("HF_TOKEN", "").strip()
+                    )
+                    hf = HuggingFaceTTS(
+                        hf_token=hf_token,
+                        tts_model=str(data.get("hf_model") or hf_cfg.get("tts_model") or "facebook/mms-tts-vie"),
+                        device=str(data.get("hf_device") or hf_cfg.get("device") or "cpu"),
+                        speaker_embeddings_path=str(data.get("hf_embeddings") or hf_cfg.get("tts_speaker_embeddings") or ""),
+                    )
+                    ok_hf, err_hf = hf.synthesize(text, out_path)
+                    if not ok_hf:
+                        return jsonify({"ok": False, "error": err_hf}), 500
+                    ok = ok_hf
+                else:
+                    ok = asyncio.run(_tts_edge(text, tts_voice, out_path, rate=tts_rate, pitch=tts_pitch, style=tts_emotion))
+            except Exception as inner_e:
+                return jsonify({"ok": False, "error": f"TTS generation failed: {str(inner_e)}"}), 500
 
             if not ok or (not out_path.exists()) or out_path.stat().st_size <= 0:
-                return jsonify({"ok": False, "error": "Unable to synthesize preview audio"}), 500
+                return jsonify({"ok": False, "error": "Unable to synthesize preview audio (empty file)"}), 500
+
+            if fx_enabled:
+                from core.video_processor import find_ffmpeg, apply_audio_effects
+                ffmpeg = find_ffmpeg()
+                if ffmpeg:
+                    fx_out = _Path(tmpdir) / "preview_fx.mp3"
+                    try:
+                        apply_audio_effects(
+                            input_path=out_path,
+                            output_path=fx_out,
+                            ffmpeg=ffmpeg,
+                            pitch_semitones=fx_params["pitch"],
+                            speed=fx_params["speed"],
+                            bass=int(fx_params["bass"]),
+                            mid=int(fx_params["mid"]),
+                            treble=int(fx_params["treble"]),
+                            compression=fx_params["comp"],
+                            reverb=int(fx_params["reverb"]),
+                        )
+                        if fx_out.exists() and fx_out.stat().st_size > 0:
+                            out_path = fx_out
+                    except Exception:
+                        pass  # fallback to non-fx audio
 
             audio_data = io.BytesIO(out_path.read_bytes())
             audio_data.seek(0)
             return send_file(audio_data, mimetype="audio/mpeg", as_attachment=False, download_name="preview.mp3")
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/hf-tts/models", methods=["GET"])
+def hf_tts_models():
+    """Trả về danh sách các HuggingFace TTS model được hỗ trợ."""
+    models = [
+        {"id": "facebook/mms-tts-vie", "name": "MMS TTS Vietnamese", "language": "vi"},
+        {"id": "facebook/mms-tts-eng", "name": "MMS TTS English", "language": "en"},
+        {"id": "facebook/mms-tts-zho", "name": "MMS TTS Chinese", "language": "zh"},
+        {"id": "microsoft/speecht5_tts", "name": "SpeechT5 TTS (cần speaker embeddings)", "language": "en"},
+    ]
+    return jsonify({"ok": True, "models": models})
+
+
+# ── HF VOICES MANAGEMENT ───────────────────────────────────────────────────
+
+VOICES_DIR = ROOT / "voices"
+VOICES_DIR.mkdir(parents=True, exist_ok=True)
+
+@app.route("/api/hf_voices", methods=["GET"])
+def list_hf_voices():
+    voices = []
+    for f in VOICES_DIR.glob("*"):
+        if f.suffix in (".npy", ".pt"):
+            voices.append({"name": f.name, "path": str(f.absolute())})
+    return jsonify({"ok": True, "voices": voices})
+
+@app.route("/api/hf_voices/upload", methods=["POST"])
+def upload_hf_voice():
+    import tempfile
+    from werkzeug.utils import secure_filename
+    if "audio" not in request.files:
+        return jsonify({"ok": False, "error": "No audio file uploaded"}), 400
+    file = request.files["audio"]
+    name = str(request.form.get("name") or "voice").strip()
+    name = secure_filename(name)
+    if not name: name = "voice"
+    if not name.endswith(".npy"): name += ".npy"
+    
+    out_path = VOICES_DIR / name
+    if out_path.exists():
+        return jsonify({"ok": False, "error": "Tên giọng này đã tồn tại"}), 400
+        
+    try:
+        import numpy as np
+        import torch
+        import torchaudio
+        import os
+        import sys
+        import types
+        # More aggressive mocking for SpeechBrain's lazy-loading of integrations on Windows
+        mock_m = types.ModuleType('mock_m')
+        sys.modules['k2'] = mock_m
+        for sub in ['k2', 'k2_fsa', 'nlp']:
+            sys.modules[f'speechbrain.integrations.{sub}'] = mock_m
+        from speechbrain.inference.speaker import EncoderClassifier
+
+        # Windows workaround for [WinError 1314] when creating symlinks without admin rights
+        if os.name == "nt":
+            import shutil
+            if not hasattr(os, "_orig_symlink_patched"):
+                os._orig_symlink_patched = True
+                _orig_symlink = os.symlink
+                def _force_copy_symlink(src, dst, target_is_directory=False, **kwargs):
+                    try:
+                        _orig_symlink(src, dst, target_is_directory=target_is_directory, **kwargs)
+                    except OSError:
+                        if target_is_directory:
+                            shutil.copytree(src, dst, dirs_exist_ok=True)
+                        else:
+                            shutil.copy2(src, dst)
+                os.symlink = _force_copy_symlink
+
+        with tempfile.NamedTemporaryFile(suffix=".tmp", delete=False) as tmp_in:
+            in_path = tmp_in.name
+            file.save(in_path)
+            
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_out:
+            wav_path = tmp_out.name
+            
+        try:
+            from core.video_processor import find_ffmpeg
+            ffmpeg = find_ffmpeg()
+            import subprocess
+            subprocess.run([ffmpeg, "-y", "-i", in_path, "-ar", "16000", "-ac", "1", wav_path], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            return jsonify({"ok": False, "error": f"Lỗi covert audio bằng ffmpeg: {e}"}), 400
+
+        classifier = EncoderClassifier.from_hparams(source="speechbrain/spkrec-xvect-voxceleb", savedir="tmpdir")
+        signal, fs = torchaudio.load(wav_path, backend="soundfile")
+        if signal.shape[0] > 1:
+            signal = torch.mean(signal, dim=0, keepdim=True)
+            
+        embeddings = classifier.encode_batch(signal)
+        embeddings = embeddings.squeeze(1).detach().cpu().numpy()
+        
+        np.save(str(out_path), embeddings)
+        
+        try: 
+            os.unlink(in_path)
+            os.unlink(wav_path)
+        except: pass
+
+        return jsonify({"ok": True, "name": name, "path": str(out_path.absolute())})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/hf_voices/<name>", methods=["DELETE"])
+def delete_hf_voice(name):
+    from werkzeug.utils import secure_filename
+    safe_name = secure_filename(name)
+    target = VOICES_DIR / safe_name
+    if target.exists() and target.is_file():
+        try:
+            target.unlink()
+            return jsonify({"ok": True})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({"ok": False, "error": "Not found"}), 404
+
+
 
 @app.route("/api/transcribe", methods=["POST"])
 def transcribe():
@@ -1394,6 +1630,248 @@ def transcribe():
                 shutil.rmtree(uploaded_tmp_dir, ignore_errors=True)
 
     return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
+
+@app.route("/api/extract_audio", methods=["POST"])
+def extract_audio():
+    """Extract audio track from a video file and save as MP3."""
+    import tempfile, shutil
+    from pathlib import Path as _Path
+    from core.video_processor import find_ffmpeg, extract_audio_only
+
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        return jsonify({"ok": False, "error": "FFmpeg not found"}), 500
+
+    uploaded_file = request.files.get("video_file") if request.files else None
+    video_path = None
+    tmp_dir = None
+
+    data = {}
+    if request.form:
+        data.update(request.form.to_dict(flat=True))
+    if request.is_json:
+        data.update(request.get_json(silent=True) or {})
+
+    if uploaded_file and uploaded_file.filename:
+        tmp_dir = _Path(tempfile.mkdtemp(prefix="extract_upload_"))
+        video_path = tmp_dir / uploaded_file.filename
+        uploaded_file.save(str(video_path))
+        if not str(data.get("output_dir") or "").strip():
+            data["output_dir"] = str(ROOT / "Downloaded")
+    else:
+        video_path = _Path(str(data.get("video_path") or "").strip())
+
+    if not video_path or not video_path.exists():
+        return jsonify({"ok": False, "error": "Video file not found"}), 400
+
+    output_dir = str(data.get("output_dir") or "").strip()
+    if output_dir:
+        out_dir = _Path(output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / (video_path.stem + ".mp3")
+    else:
+        out_path = video_path.with_suffix(".mp3")
+
+    ok, err = extract_audio_only(video_path, out_path, ffmpeg)
+
+    if tmp_dir:
+        try:
+            shutil.rmtree(str(tmp_dir), ignore_errors=True)
+        except Exception:
+            pass
+
+    if ok:
+        return jsonify({"ok": True, "output_path": str(out_path)})
+    return jsonify({"ok": False, "error": err}), 500
+
+
+@app.route("/api/tts_from_ass", methods=["POST"])
+def tts_from_ass():
+    """Generate a combined TTS MP3 from an .ass subtitle file — streaming NDJSON log."""
+    import tempfile, shutil, asyncio as _asyncio
+    from pathlib import Path as _Path
+    from flask import Response, stream_with_context
+    from core.video_processor import (
+        find_ffmpeg, MultiProviderTTS,
+        FPT_TTS_DEFAULT_KEY, _parse_ass_file, run_ffmpeg as _run_ffmpeg,
+    )
+
+    uploaded_file = request.files.get("ass_file") if request.files else None
+    data = {}
+    if request.form:
+        data.update(request.form.to_dict(flat=True))
+    if request.is_json:
+        data.update(request.get_json(silent=True) or {})
+
+    ass_path = None
+    tmp_upload_dir = None
+
+    if uploaded_file and uploaded_file.filename:
+        tmp_upload_dir = _Path(tempfile.mkdtemp(prefix="tts_ass_upload_"))
+        ass_path = tmp_upload_dir / uploaded_file.filename
+        uploaded_file.save(str(ass_path))
+        # When file is uploaded, default output_dir to Downloaded folder
+        # so MP3 is not lost when temp dir is cleaned up
+        if not str(data.get("output_dir") or "").strip():
+            data["output_dir"] = str(ROOT / "Downloaded")
+    else:
+        ass_path = _Path(str(data.get("ass_path") or "").strip())
+
+    tts_engine  = str(data.get("tts_engine")  or "edge-tts").lower()
+    tts_voice   = str(data.get("tts_voice")   or "vi-VN-HoaiMyNeural")
+    tts_pitch   = str(data.get("tts_pitch")   or "+0Hz")
+    tts_rate    = str(data.get("tts_rate")    or "+0%")
+    tts_emotion = str(data.get("tts_emotion") or "default")
+    fx_enabled  = str(data.get("fx_enabled")  or "false").lower() in ("true", "1")
+    fx_params = {
+        "pitch":       float(data.get("fx_pitch")   or 1.5),
+        "speed":       float(data.get("fx_speed")   or 1.08),
+        "bass":        int(float(data.get("fx_bass")    or -2)),
+        "mid":         int(float(data.get("fx_mid")     or 2)),
+        "treble":      int(float(data.get("fx_treble")  or 3)),
+        "compression": str(data.get("fx_comp")    or "light"),
+        "reverb":      int(float(data.get("fx_reverb")  or 5)),
+    }
+    output_dir = str(data.get("output_dir") or "").strip()
+
+    cfg = load_cfg()
+    vp_cfg = cfg.get("video_process") or {}
+    fpt_api_key = (
+        str(data.get("fpt_api_key") or "").strip()
+        or str(vp_cfg.get("fpt_api_key") or "").strip()
+        or FPT_TTS_DEFAULT_KEY
+    )
+
+    def _emit(log_lines: list, msg: str, level: str = "info", pct: int = None):
+        log_lines.append(f"[{level.upper()}] {msg}")
+        payload = {"log": msg, "level": level}
+        if pct is not None:
+            payload["overall"] = pct
+            payload["overall_lbl"] = msg
+        return json.dumps(payload, ensure_ascii=False) + "\n"
+
+    def generate():
+        log_lines = []
+        ffmpeg = find_ffmpeg()
+
+        if not ffmpeg:
+            yield _emit(log_lines, "FFmpeg không tìm thấy.", "error", 0)
+            return
+
+        if not ass_path or not ass_path.exists():
+            yield _emit(log_lines, f"File .ass không tồn tại: {ass_path}", "error", 0)
+            return
+
+        # Resolve output dir
+        if output_dir:
+            out_dir = _Path(output_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            out_dir = ass_path.parent
+
+        out_mp3 = out_dir / (ass_path.stem + "_tts.mp3")
+        log_file = out_dir / (ass_path.stem + "_tts.log")
+
+        yield _emit(log_lines, f"📂 File ASS: {ass_path}", "info", 0)
+        yield _emit(log_lines, f"📁 Thư mục xuất: {out_dir}", "info", 2)
+
+        try:
+            segments = _parse_ass_file(ass_path)
+            if not segments:
+                yield _emit(log_lines, "Không tìm thấy dialogue trong file .ass", "error", 0)
+                return
+
+            yield _emit(log_lines, f"✅ Đọc được {len(segments)} đoạn từ file .ass", "info", 5)
+
+            with tempfile.TemporaryDirectory(prefix="tts_ass_") as tmpdir:
+                tmpdir = _Path(tmpdir)
+                tts = MultiProviderTTS(
+                    voice=tts_voice, engine=tts_engine,
+                    fpt_api_key=fpt_api_key, fpt_speed=0,
+                    pitch=tts_pitch, rate=tts_rate, style=tts_emotion,
+                )
+                translations = [s.get("text", "") for s in segments]
+
+                yield _emit(log_lines, f"🎙 Bắt đầu tổng hợp giọng ({tts_engine}, {tts_voice})...", "info", 10)
+
+                clips = _asyncio.run(tts.generate_all(
+                    segments, translations, tmpdir,
+                    max_concurrency=2, retries=2,
+                    tts_speed=1.0, auto_speed=False, ffmpeg=ffmpeg,
+                    fx_enabled=fx_enabled, fx_params=fx_params,
+                ))
+
+                if not clips:
+                    yield _emit(log_lines, "Không tạo được clip TTS nào.", "error", 0)
+                    return
+
+                yield _emit(log_lines, f"✅ Tổng hợp xong {len(clips)} clip", "info", 70)
+
+                if fx_enabled:
+                    yield _emit(log_lines, "🎛 Đã áp dụng hiệu ứng FX vào từng clip", "info", 75)
+
+                # Concat
+                yield _emit(log_lines, "🔗 Đang ghép các clip thành file MP3...", "info", 80)
+                concat_list = tmpdir / "concat.txt"
+                with open(str(concat_list), "w", encoding="utf-8") as f:
+                    for c in clips:
+                        f.write(f"file '{str(c['path']).replace(chr(92), '/')}'\n")
+
+                ok, err = _run_ffmpeg([
+                    ffmpeg, "-f", "concat", "-safe", "0",
+                    "-i", str(concat_list),
+                    "-c:a", "libmp3lame", "-b:a", "128k",
+                    str(out_mp3), "-y", "-loglevel", "error"
+                ])
+
+                if not ok:
+                    yield _emit(log_lines, f"❌ Ghép MP3 thất bại: {err}", "error", 0)
+                    return
+
+            yield _emit(log_lines, f"✅ Hoàn thành! File MP3: {out_mp3}", "success", 100)
+            yield json.dumps({"ok": True, "output_path": str(out_mp3), "clips": len(clips)}, ensure_ascii=False) + "\n"
+
+        except Exception as exc:
+            LOGGER.exception("tts_from_ass error")
+            yield _emit(log_lines, f"❌ Lỗi: {exc}", "error", 0)
+        finally:
+            # Write log file
+            try:
+                with open(str(log_file), "w", encoding="utf-8") as lf:
+                    lf.write(f"=== TTS from ASS — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+                    lf.write(f"ASS: {ass_path}\n")
+                    lf.write(f"Engine: {tts_engine} | Voice: {tts_voice} | FX: {fx_enabled}\n\n")
+                    lf.write("\n".join(log_lines))
+                    lf.write("\n")
+            except Exception:
+                pass
+            if tmp_upload_dir:
+                shutil.rmtree(str(tmp_upload_dir), ignore_errors=True)
+
+    return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
+
+
+@app.route("/api/upload_anti_fp_image", methods=["POST"])
+def upload_anti_fp_image():
+    """Upload an overlay / logo image for anti-fingerprint processing."""
+    import shutil
+    from pathlib import Path as _Path
+    from utils.validators import sanitize_filename
+
+    upload_file = request.files.get("file") if request.files else None
+    if not upload_file or not upload_file.filename:
+        return jsonify({"ok": False, "error": "No file provided"}), 400
+
+    img_type = str(request.form.get("type") or "overlay")
+    safe_name = sanitize_filename(upload_file.filename)
+    upload_dir = ROOT / "temp_uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    save_path = upload_dir / f"anti-fp-{img_type}-{safe_name}"
+    upload_file.save(str(save_path))
+
+    return jsonify({"ok": True, "path": str(save_path)})
+
 
 @app.route("/api/process_video", methods=["POST"])
 def process_video():
@@ -1681,6 +2159,38 @@ def _preload_whisper_model():
     except Exception:
         pass
 
+def _preload_hf_tts_model():
+    """Preload HuggingFace TTS model in background if selected, so first preview is fast."""
+    try:
+        from core.hf_tts import HuggingFaceTTS
+        import os
+        cfg = load_cfg()
+        vp_cfg = cfg.get("video_process") or {}
+        tr_cfg = cfg.get("translation") or {}
+        hf_cfg = cfg.get("huggingface") or {}
+        
+        hf_token = (
+            str(hf_cfg.get("hf_token") or "").strip()
+            or str(tr_cfg.get("hf_token") or "").strip()
+            or os.getenv("HF_TOKEN", "").strip()
+        )
+        tts_model = str(hf_cfg.get("tts_model") or "facebook/mms-tts-vie")
+        device = str(hf_cfg.get("device") or "cpu")
+        embeddings = str(hf_cfg.get("tts_speaker_embeddings") or "")
+        
+        # Load the model in background to trigger the download or ram allocation
+        hf = HuggingFaceTTS(
+            hf_token=hf_token,
+            tts_model=tts_model,
+            device=device,
+            speaker_embeddings_path=embeddings
+        )
+        hf._load_model()
+        if hf._is_speecht5():
+            hf._load_speaker_embeddings()
+    except Exception:
+        pass
+
 
 # ── YouTube Upload ─────────────────────────────────────────────────────────
 _youtube_uploader = None
@@ -1951,5 +2461,6 @@ if __name__ == "__main__":
     elif _NGROK_ERROR:
         print(f"[ngrok] Error: {_NGROK_ERROR}")
     threading.Thread(target=_preload_whisper_model, daemon=True).start()
+    threading.Thread(target=_preload_hf_tts_model, daemon=True).start()
     threading.Timer(1.2, lambda: webbrowser.open(f"http://localhost:{APP_PORT}")).start()
     socketio.run(app, host=APP_HOST, port=APP_PORT, debug=False)
