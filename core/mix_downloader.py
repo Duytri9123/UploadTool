@@ -72,7 +72,7 @@ class MixDownloader(BaseDownloader):
 
         while has_more:
             await self.rate_limiter.acquire()
-            raw_page = await fetch_mix_aweme(mix_id, cursor=cursor, count=20)
+            raw_page = await fetch_mix_aweme(mix_id, cursor=cursor, count=50)
             page = BaseUserModeStrategy._normalize_page_data(raw_page)
             items = page.get("items", [])
             if not items:

@@ -686,6 +686,7 @@ def user_videos_page():
     url    = data.get("url","").strip()
     cursor = int(data.get("cursor", 0))
     count  = int(data.get("count", 20))
+    offset = int(data.get("offset", 0))  # số video đã có ở client, dùng khi cursor=0
     if not url:
         return jsonify({"error":"No URL"}), 400
 
@@ -722,13 +723,44 @@ def user_videos_page():
             return {"error": "Invalid user URL"}
         sec_uid = parsed.get("sec_uid","")
         async with DouyinAPIClient(cm.get_cookies(), proxy=config.get("proxy")) as api:
-            result = await api.get_user_post(sec_uid, max_cursor=cursor, count=count)
-            items  = result.get("items") or result.get("aweme_list") or []
-            return {
-                "videos":      parse_items(items),
-                "has_more":    result.get("has_more", False),
-                "next_cursor": result.get("max_cursor", 0),
-            }
+            # Nếu cursor=0 nhưng offset>0, cần loop qua các trang để bỏ qua offset video đầu
+            if cursor == 0 and offset > 0:
+                all_items = []
+                cur = 0
+                seen_ids = set()
+                # Loop tối đa 20 trang, dừng khi không còn item mới hoặc cursor không tiến
+                for _ in range(20):
+                    result = await api.get_user_post(sec_uid, max_cursor=cur, count=20)
+                    page_items = result.get("items") or result.get("aweme_list") or []
+                    added = 0
+                    for item in page_items:
+                        aid = item.get("aweme_id")
+                        if aid and aid not in seen_ids:
+                            seen_ids.add(aid)
+                            all_items.append(item)
+                            added += 1
+                    new_cursor = int(result.get("max_cursor", 0) or 0)
+                    # Dừng nếu: không có item mới, cursor không tiến, hoặc đã đủ
+                    if added == 0 or new_cursor == cur or len(all_items) >= offset + count:
+                        break
+                    cur = new_cursor
+                has_more_final = len(all_items) > offset + count
+                slice_items = all_items[offset:offset + count]
+                return {
+                    "videos":      parse_items(slice_items),
+                    "has_more":    has_more_final,
+                    "next_cursor": cur,
+                    "offset":      offset + len(slice_items),
+                }
+            else:
+                result = await api.get_user_post(sec_uid, max_cursor=cursor, count=count)
+                items  = result.get("items") or result.get("aweme_list") or []
+                return {
+                    "videos":      parse_items(items),
+                    "has_more":    result.get("has_more", False),
+                    "next_cursor": result.get("max_cursor", 0),
+                    "offset":      offset + len(items),
+                }
     try:
         return jsonify(asyncio.run(fetch()))
     except Exception as e:
@@ -894,7 +926,9 @@ def user_info():
     url = data.get("url","").strip()
     if not url:
         return jsonify({"error":"No URL"}), 400
+
     async def fetch():
+        import asyncio as _asyncio
         from config import ConfigLoader
         from auth import CookieManager
         from core import DouyinAPIClient, URLParser
@@ -902,59 +936,78 @@ def user_info():
         cm = CookieManager(); cm.set_cookies(get_cookies_with_fallback())
         parsed = URLParser.parse(url)
         if not parsed or parsed.get("type") != "user":
-            return None, None
+            return None, []
         sec_uid = parsed.get("sec_uid","")
         async with DouyinAPIClient(cm.get_cookies(), proxy=config.get("proxy")) as api:
             info = await api.get_user_info(sec_uid)
-            posts = await api.get_user_post(sec_uid, count=20)
-            return info, posts
+            if not info:
+                return None, []
+
+            # Lấy hết tất cả video: loop nhiều trang cho đến khi hết
+            all_items = []
+            seen_ids = set()
+            cursor = 0
+            pagination_blocked = False
+            for _ in range(200):  # tối đa 200 trang = 4000 video
+                result = await api.get_user_post(sec_uid, max_cursor=cursor, count=20)
+                page_items = result.get("items") or result.get("aweme_list") or []
+                added = 0
+                for item in page_items:
+                    aid = item.get("aweme_id")
+                    if aid and aid not in seen_ids:
+                        seen_ids.add(aid)
+                        all_items.append(item)
+                        added += 1
+                new_cursor = int(result.get("max_cursor", 0) or 0)
+                # Dừng khi không có item mới hoặc cursor không tiến
+                if added == 0 or new_cursor == cursor:
+                    if cursor > 0 and added == 0:
+                        pagination_blocked = True
+                    break
+                cursor = new_cursor
+                await _asyncio.sleep(0.3)  # delay nhỏ tránh rate limit
+
+            return info, all_items, pagination_blocked
+
+    def parse_item(item):
+        cover = _extract_cover(item)
+        ts = item.get("create_time", 0)
+        dt = datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else ""
+        return {
+            "aweme_id": item.get("aweme_id", ""),
+            "desc":     (item.get("desc", "") or "")[:80],
+            "cover":    cover,
+            "date":     dt,
+            "ts":       ts,
+            "play":     (item.get("statistics") or {}).get("play_count", 0),
+            "like":     (item.get("statistics") or {}).get("digg_count", 0),
+            "type":     "gallery" if item.get("images") else "video",
+            "duration": (item.get("video") or {}).get("duration", 0) or
+                        (item.get("video") or {}).get("video_duration", 0) or
+                        item.get("duration", 0) or 0,
+        }
+
     try:
-        info, posts = asyncio.run(fetch())
+        info, all_items, pagination_blocked = asyncio.run(fetch())
         if not info:
-            return jsonify({"error":"User not found or invalid URL"}), 404
+            return jsonify({"error": "User not found or invalid URL"}), 404
 
-        # parse video previews
-        videos = []
-        for item in (posts or {}).get("items", [])[:20]:
-            cover = ""
-            vc = item.get("video",{}).get("cover") or item.get("video",{}).get("origin_cover") or {}
-            urls = vc.get("url_list") or []
-            if urls: cover = urls[0]
-            # gallery fallback
-            if not cover:
-                imgs = item.get("images") or []
-                if imgs:
-                    ul = (imgs[0].get("url_list") or [])
-                    if ul: cover = ul[0]
-            ts = item.get("create_time",0)
-            dt = datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else ""
-            duration = (item.get("video") or {}).get("duration", 0) or \
-                       (item.get("video") or {}).get("video_duration", 0) or \
-                       item.get("duration", 0) or 0
-            videos.append({
-                "aweme_id": item.get("aweme_id",""),
-                "desc":     (item.get("desc","") or "")[:60],
-                "cover":    cover,
-                "date":     dt,
-                "ts":       ts,
-                "play":     item.get("statistics",{}).get("play_count",0),
-                "like":     item.get("statistics",{}).get("digg_count",0),
-                "type":     "gallery" if item.get("images") else "video",
-                "duration": duration,
-            })
-
+        videos = [parse_item(i) for i in all_items]
+        aweme_count = info.get("aweme_count", 0)
         return jsonify({
-            "nickname":    info.get("nickname",""),
-            "uid":         info.get("uid",""),
-            "sec_uid":     info.get("sec_uid",""),
-            "signature":   info.get("signature",""),
+            "nickname":    info.get("nickname", ""),
+            "uid":         info.get("uid", ""),
+            "sec_uid":     info.get("sec_uid", ""),
+            "signature":   info.get("signature", ""),
             "avatar":      ((info.get("avatar_thumb") or {}).get("url_list") or [""])[0],
-            "follower":    info.get("follower_count",0),
-            "following":   info.get("following_count",0),
-            "aweme_count": info.get("aweme_count",0),
+            "follower":    info.get("follower_count", 0),
+            "following":   info.get("following_count", 0),
+            "aweme_count": aweme_count,
             "videos":      videos,
-            "has_more":    posts.get("has_more", False),
-            "next_cursor": posts.get("max_cursor", 0),
+            "has_more":    False,
+            "next_cursor": 0,
+            "pagination_blocked": pagination_blocked,
+            "fetched_count": len(videos),
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
