@@ -34,7 +34,7 @@ def _llm_translate(
     api_url: str,
     api_key: str,
     model: str,
-    timeout: int = 60,
+    timeout: int = 30,
     batch_size: int = 30,
 ) -> List[str]:
     """Translate texts in batches to avoid token limits."""

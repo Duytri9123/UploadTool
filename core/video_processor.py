@@ -1780,93 +1780,97 @@ def process_video_full(data: dict) -> Generator[str, None, None]:
                 else:
                     return
 
-    # ── Step 2: Translate ZH → VI ─────────────────────────────────────────────
+
+    # Step 2: Translate ZH → VI
     translated_texts = []
-    # Resume: nếu vi.ass đã có → load lại segments và translated_texts từ đó
-    if vi_ass_path_cached.exists() and vi_ass_path_cached.stat().st_size > 0 and segments:
-        try:
-            cached_vi_segs = _parse_srt(vi_ass_path_cached) if vi_ass_path_cached.suffix == ".srt" else []
-            # Parse ASS để lấy text
-            if not cached_vi_segs:
-                raw = vi_ass_path_cached.read_text(encoding="utf-8", errors="replace")
-                cached_vi_segs = []
-                for line in raw.splitlines():
-                    if line.startswith("Dialogue:"):
-                        parts = line.split(",", 9)
-                        if len(parts) >= 10:
-                            t_start = parts[1].strip(); t_end = parts[2].strip()
-                            def _ass_to_sec(t):
-                                h, m, s = t.split(":")
-                                return int(h)*3600 + int(m)*60 + float(s)
-                            cached_vi_segs.append({"start": _ass_to_sec(t_start), "end": _ass_to_sec(t_end), "text": parts[9].replace("\\N", "\n")})
-            if cached_vi_segs:
-                translated_texts = [s["text"] for s in cached_vi_segs]
-                vi_ass_path = vi_ass_path_cached
-                srt_path = vi_ass_path
-                yield send(log=f"[Bước 2/5] ♻ Dùng lại bản dịch cũ ({len(translated_texts)} đoạn): {vi_ass_path_cached.name}", level="info")
-                yield send(overall=55, overall_lbl="Dùng lại bản dịch cũ")
-        except Exception:
-            translated_texts = []
-
-    if not translated_texts and (do_translate or do_voice) and segments:
-        n_segs = len(segments)
-        batch_sz = 30
-        n_batches = (n_segs + batch_sz - 1) // batch_sz
-        yield send(log=f"[Bước 2/5] Dịch {n_segs} đoạn sang tiếng Việt ({n_batches} batch)...", level="info")
-        yield send(overall=45, overall_lbl=f"Đang dịch {n_segs} đoạn...")
-        try:
-            from utils.translation import BatchTranslator
-            trans_cfg = cfg_raw.get("translation", {})
-            if not trans_cfg.get("groq_key"):
-                trans_cfg["groq_key"] = (
-                    str(data.get("groq_api_key") or "").strip()
-                    or os.getenv("GROQ_API_KEY", "").strip()
-                    or str(tr_cfg.get("groq_api_key") or "").strip()
-                )
-            if not trans_cfg.get("groq_model"):
-                trans_cfg["groq_model"] = (
-                    str(data.get("groq_model") or "").strip()
-                    or str(tr_cfg.get("groq_model") or "").strip()
-                    or "llama-3.1-8b-instant"
-                )
-            req_provider = str(data.get("translate_provider") or "").strip().lower()
-            cfg_provider = str(trans_cfg.get("preferred_provider") or "").strip().lower()
-            # Treat "auto" as unspecified so config/provider key can decide deterministically.
-            if req_provider == "auto":
-                req_provider = ""
-            if cfg_provider == "auto":
-                cfg_provider = ""
-            provider = req_provider or cfg_provider or ("deepseek" if trans_cfg.get("deepseek_key") else "auto")
-            texts = [seg.get("text", "").strip() for seg in segments]
-            has_ds = bool(trans_cfg.get("deepseek_key"))
-            has_groq = bool(trans_cfg.get("groq_key"))
-            yield send(log=f"[Bước 2/5] Provider: {provider} | deepseek={'✓' if has_ds else '✗'} | groq={'✓' if has_groq else '✗'}", level="info")
-            translator = BatchTranslator(trans_cfg)
-            translated_texts, used = translator.translate(texts, provider)
-            yield send(log=f"[Bước 2/5] ✓ Dịch xong {len(translated_texts)} đoạn (provider: {used})", level="success")
-            yield send(overall=55, overall_lbl="Dịch xong")
-
-            if translated_texts:
-                # Luôn dùng ASS — không dùng SRT
-                alignment = 8 if str(data.get("subtitle_position", "bottom")).lower() == "top" else 2
-                vi_ass_path = out_dir / f"{stem}_vi.ass"
-                vi_segs = [{"start": s["start"], "end": s["end"], "text": t}
-                           for s, t in zip(segments, translated_texts) if t]
-                write_ass(vi_segs, vi_ass_path,
-                          font_size=_as_int(data.get("font_size", 32), 32),
-                          font_color=data.get("font_color", "white"),
-                          outline_color=data.get("outline_color", "black"),
-                          outline_width=_as_int(data.get("outline_width", 2), 2),
-                          margin_v=effective_margin_v,
-                          alignment=alignment)
-                yield send(log=f"[Bước 2/5] ✓ ASS tiếng Việt: {vi_ass_path.name}", level="success")
-
-                if do_burn and do_burn_vi:
+    if not do_translate:
+        yield send(log="[Bước 2/5] Bỏ qua dịch phụ đề vì đã tắt translate_subs", level="info")
+    else:
+        # Resume: nếu vi.ass đã có → load lại segments và translated_texts từ đó
+        if vi_ass_path_cached.exists() and vi_ass_path_cached.stat().st_size > 0 and segments:
+            try:
+                cached_vi_segs = _parse_srt(vi_ass_path_cached) if vi_ass_path_cached.suffix == ".srt" else []
+                # Parse ASS để lấy text
+                if not cached_vi_segs:
+                    raw = vi_ass_path_cached.read_text(encoding="utf-8", errors="replace")
+                    cached_vi_segs = []
+                    for line in raw.splitlines():
+                        if line.startswith("Dialogue:"):
+                            parts = line.split(",", 9)
+                            if len(parts) >= 10:
+                                t_start = parts[1].strip(); t_end = parts[2].strip()
+                                def _ass_to_sec(t):
+                                    h, m, s = t.split(":")
+                                    return int(h)*3600 + int(m)*60 + float(s)
+                                cached_vi_segs.append({"start": _ass_to_sec(t_start), "end": _ass_to_sec(t_end), "text": parts[9].replace("\\N", "\n")})
+                if cached_vi_segs:
+                    translated_texts = [s["text"] for s in cached_vi_segs]
+                    vi_ass_path = vi_ass_path_cached
                     srt_path = vi_ass_path
-                    yield send(log=f"[Bước 2/5] Sẽ burn: {srt_path.name}", level="info")
-        except Exception as e:
-            yield send(log=f"[Bước 2/5] ✗ Dịch thất bại: {e}", level="error")
-            translated_texts = []
+                    yield send(log=f"[Bước 2/5] ♻ Dùng lại bản dịch cũ ({len(translated_texts)} đoạn): {vi_ass_path_cached.name}", level="info")
+                    yield send(overall=55, overall_lbl="Dùng lại bản dịch cũ")
+            except Exception:
+                translated_texts = []
+
+        if not translated_texts and segments:
+            n_segs = len(segments)
+            batch_sz = 30
+            n_batches = (n_segs + batch_sz - 1) // batch_sz
+            yield send(log=f"[Bước 2/5] Dịch {n_segs} đoạn sang tiếng Việt ({n_batches} batch)...", level="info")
+            yield send(overall=45, overall_lbl=f"Đang dịch {n_segs} đoạn...")
+            try:
+                from utils.translation import BatchTranslator
+                trans_cfg = cfg_raw.get("translation", {})
+                if not trans_cfg.get("groq_key"):
+                    trans_cfg["groq_key"] = (
+                        str(data.get("groq_api_key") or "").strip()
+                        or os.getenv("GROQ_API_KEY", "").strip()
+                        or str(tr_cfg.get("groq_api_key") or "").strip()
+                    )
+                if not trans_cfg.get("groq_model"):
+                    trans_cfg["groq_model"] = (
+                        str(data.get("groq_model") or "").strip()
+                        or str(tr_cfg.get("groq_model") or "").strip()
+                        or "llama-3.1-8b-instant"
+                    )
+                req_provider = str(data.get("translate_provider") or "").strip().lower()
+                cfg_provider = str(trans_cfg.get("preferred_provider") or "").strip().lower()
+                # Treat "auto" as unspecified so config/provider key can decide deterministically.
+                if req_provider == "auto":
+                    req_provider = ""
+                if cfg_provider == "auto":
+                    cfg_provider = ""
+                provider = req_provider or cfg_provider or ("deepseek" if trans_cfg.get("deepseek_key") else "auto")
+                texts = [seg.get("text", "").strip() for seg in segments]
+                has_ds = bool(trans_cfg.get("deepseek_key"))
+                has_groq = bool(trans_cfg.get("groq_key"))
+                yield send(log=f"[Bước 2/5] Provider: {provider} | deepseek={'✓' if has_ds else '✗'} | groq={'✓' if has_groq else '✗'}", level="info")
+                translator = BatchTranslator(trans_cfg)
+                translated_texts, used = translator.translate(texts, provider)
+                yield send(log=f"[Bước 2/5] ✓ Dịch xong {len(translated_texts)} đoạn (provider: {used})", level="success")
+                yield send(overall=55, overall_lbl="Dịch xong")
+
+                if translated_texts:
+                    # Luôn dùng ASS — không dùng SRT
+                    alignment = 8 if str(data.get("subtitle_position", "bottom")).lower() == "top" else 2
+                    vi_ass_path = out_dir / f"{stem}_vi.ass"
+                    vi_segs = [{"start": s["start"], "end": s["end"], "text": t}
+                               for s, t in zip(segments, translated_texts) if t]
+                    write_ass(vi_segs, vi_ass_path,
+                              font_size=_as_int(data.get("font_size", 32), 32),
+                              font_color=data.get("font_color", "white"),
+                              outline_color=data.get("outline_color", "black"),
+                              outline_width=_as_int(data.get("outline_width", 2), 2),
+                              margin_v=effective_margin_v,
+                              alignment=alignment)
+                    yield send(log=f"[Bước 2/5] ✓ ASS tiếng Việt: {vi_ass_path.name}", level="success")
+
+                    if do_burn and do_burn_vi:
+                        srt_path = vi_ass_path
+                        yield send(log=f"[Bước 2/5] Sẽ burn: {srt_path.name}", level="info")
+            except Exception as e:
+                yield send(log=f"[Bước 2/5] ✗ Dịch thất bại: {e}", level="error")
+                translated_texts = []
 
     # ── Step 3: Burn subtitles ────────────────────────────────────────────────
     burned_path = None
