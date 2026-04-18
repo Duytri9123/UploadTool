@@ -1,5 +1,7 @@
 {
   "version": 2,
+  "buildCommand": "npm run build",
+  "outputDirectory": "static/dist",
   "builds": [
     {
       "src": "app.py",
@@ -7,9 +9,17 @@
       "config": {
         "maxLambdaSize": "50mb"
       }
+    },
+    {
+      "src": "static/dist/**",
+      "use": "@vercel/static"
     }
   ],
   "routes": [
+    {
+      "src": "/static/dist/(.*)",
+      "dest": "/static/dist/$1"
+    },
     {
       "src": "/static/(.*)",
       "dest": "/static/$1"
