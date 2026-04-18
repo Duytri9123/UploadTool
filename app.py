@@ -993,6 +993,8 @@ def user_info():
             return jsonify({"error": "User not found or invalid URL"}), 404
 
         videos = [parse_item(i) for i in all_items]
+        # Không dịch ở đây — client gọi /api/translate_descs sau khi nhận data
+
         aweme_count = info.get("aweme_count", 0)
         return jsonify({
             "nickname":    info.get("nickname", ""),
@@ -1220,6 +1222,27 @@ def api_translate():
         return jsonify({"result": results[0] if results else text, "provider": used})
     except Exception as e:
         return jsonify({"result": text, "provider": "error", "error": str(e)})
+
+@app.route("/api/translate_descs", methods=["POST"])
+def api_translate_descs():
+    """Dịch danh sách tiêu đề video sau khi đã tải xong — tách riêng để không block user_info."""
+    data = request.json or {}
+    descs = data.get("descs", [])
+    provider = (data.get("provider") or "").strip()
+    if not descs or not provider:
+        return jsonify({"results": descs, "provider": "none"})
+    cfg = load_cfg()
+    tr_cfg = dict(cfg.get("translation") or {})
+    tr_cfg["preferred_provider"] = provider
+    try:
+        from utils.translation import translate_texts
+        results, used = translate_texts(descs, tr_cfg, provider)
+        if results and len(results) == len(descs):
+            return jsonify({"results": results, "provider": used})
+        return jsonify({"results": descs, "provider": "error", "error": "Kết quả không khớp số lượng"})
+    except Exception as e:
+        LOGGER.warning("translate_descs failed: %s", e)
+        return jsonify({"results": descs, "provider": "error", "error": str(e)})
 
 @app.route("/api/translation_status", methods=["GET"])
 def translation_status():

@@ -15,6 +15,37 @@ import ProgressBar from '../../components/ProgressBar/ProgressBar.js';
 import LogBox from '../../components/LogBox/LogBox.js';
 import { API_ENDPOINTS } from '../../modules/constants.js';
 
+const TTS_VOICE_PRESETS = {
+  'fpt-ai': [
+    { value: 'banmai', label: 'Ban Mai (FPT - Nữ)' },
+    { value: 'thuminh', label: 'Thu Minh (FPT - Nữ)' },
+    { value: 'myan', label: 'My An (FPT - Nữ)' },
+    { value: 'leminh', label: 'Le Minh (FPT - Nam)' },
+  ],
+  'edge-tts': [
+    { value: 'vi-VN-HoaiMyNeural', label: 'Hoai My (Edge - Nữ)' },
+    { value: 'vi-VN-NamMinhNeural', label: 'Nam Minh (Edge - Nam)' },
+  ],
+  'minimax': [
+    { value: 'Calm_Woman', label: 'Calm Woman (MiniMax - Nữ)' },
+    { value: 'Gentle_Woman', label: 'Gentle Woman (MiniMax - Nữ)' },
+    { value: 'Lively_Girl', label: 'Lively Girl (MiniMax - Nữ)' },
+    { value: 'Confident_Man', label: 'Confident Man (MiniMax - Nam)' },
+    { value: 'Deep_Voice_Man', label: 'Deep Voice Man (MiniMax - Nam)' },
+    { value: 'Energetic_Male', label: 'Energetic Male (MiniMax - Nam)' },
+  ],
+  'gtts': [{ value: 'vi', label: 'Vietnamese (gTTS)' }],
+  'huggingface': [{ value: 'hf-default', label: 'HuggingFace Default' }],
+};
+
+const TTS_DEFAULT_VOICE = {
+  'fpt-ai': 'banmai',
+  'edge-tts': 'vi-VN-HoaiMyNeural',
+  'minimax': 'Calm_Woman',
+  'gtts': 'vi',
+  'huggingface': 'hf-default',
+};
+
 export class ProcessPage {
   constructor(options = {}) {
     this.options = options;
@@ -55,6 +86,7 @@ export class ProcessPage {
     this._cacheRefs();
     this._initSubComponents();
     this._attachListeners();
+    this._syncVoiceOptions();
   }
 
   mount(parent) {
@@ -78,6 +110,23 @@ export class ProcessPage {
 
   // ─── Config Sync ────────────────────────────────────────────────────────────
 
+  _syncVoiceOptions(currentVoice) {
+    const engineEl = this._element.querySelector('#pp-tts-engine');
+    const voiceEl = this._element.querySelector('#pp-tts-voice');
+    if (!engineEl || !voiceEl) return;
+
+    const engine = engineEl.value || 'edge-tts';
+    const preset = TTS_VOICE_PRESETS[engine] || TTS_VOICE_PRESETS['edge-tts'];
+    const current = currentVoice || voiceEl.value;
+
+    voiceEl.innerHTML = preset.map(p =>
+      `<option value="${p.value}"${p.value === current ? ' selected' : ''}>${p.label}</option>`
+    ).join('');
+
+    const keep = preset.some(p => p.value === current);
+    if (!keep) voiceEl.value = TTS_DEFAULT_VOICE[engine] || preset[0].value;
+  }
+
   async _loadConfig() {
     try {
       const cfg = await fetch('/api/config').then(r => r.json());
@@ -90,7 +139,7 @@ export class ProcessPage {
       set('pp-model', vp.model);
       set('pp-lang', vp.language);
       set('pp-tts-engine', vp.tts_engine);
-      set('pp-tts-voice', vp.tts_voice);
+      this._syncVoiceOptions(vp.tts_voice);
       set('pp-font-size', vp.font_size);
       setChk('pp-burn-subs', vp.burn_subs);
       setChk('pp-translate-subs', vp.translate_subs);
@@ -99,6 +148,18 @@ export class ProcessPage {
       setChk('pp-afp', vp.afp_enabled);
       setChk('pp-keep-bgm', vp.keep_bgm);
       setChk('pp-auto-speed', vp.auto_speed);
+
+      const afp = vp.anti_fingerprint || {};
+      setChk('pp-afp-flip', afp.flip_h);
+      setChk('pp-afp-vignette', afp.vignette);
+      setChk('pp-afp-vertical', afp.vertical);
+      set('pp-afp-brightness', afp.brightness ?? 0.02);
+      set('pp-afp-contrast', afp.contrast ?? 1.03);
+      set('pp-afp-speed', afp.speed ?? 1.0);
+      if (vp.afp_enabled) {
+        const settings = this._element.querySelector('#pp-afp-settings');
+        if (settings) settings.style.display = 'block';
+      }
     } catch (e) {
       console.warn('[ProcessPage] Config load failed:', e);
     }
@@ -196,6 +257,18 @@ export class ProcessPage {
                   placeholder="Dán URL TikTok / YouTube..."
                   autocomplete="off"
                 />
+                <button
+                  type="button"
+                  id="pp-add-queue"
+                  class="process-page__queue-add-btn"
+                  title="Thêm URL vào hàng chờ"
+                  aria-label="Thêm vào hàng chờ"
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+                  </svg>
+                  Hàng chờ
+                </button>
                 <label class="process-page__file-btn" for="pp-file" title="Chọn file video">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -243,15 +316,16 @@ export class ProcessPage {
               <div class="process-page__field">
                 <label class="process-page__label" for="pp-tts-engine">TTS Engine</label>
                 <select id="pp-tts-engine" class="process-page__select">
-                  <option value="edge">Edge TTS</option>
+                  <option value="edge-tts">Edge TTS</option>
+                  <option value="fpt-ai">FPT AI</option>
+                  <option value="minimax">MiniMax</option>
                   <option value="gtts">gTTS</option>
-                  <option value="piper">Piper</option>
-                  <option value="hf">HuggingFace</option>
+                  <option value="huggingface">HuggingFace</option>
                 </select>
               </div>
               <div class="process-page__field">
                 <label class="process-page__label" for="pp-tts-voice">Giọng đọc</label>
-                <input type="text" id="pp-tts-voice" class="process-page__input" placeholder="vi-VN-HoaiMyNeural" />
+                <select id="pp-tts-voice" class="process-page__select"></select>
               </div>
             </div>
 
@@ -310,6 +384,41 @@ export class ProcessPage {
                 </label>
               </div>
             </fieldset>
+
+            <!-- Anti-fingerprint settings (shown when enabled) -->
+            <div id="pp-afp-settings" class="process-page__afp-settings" style="display:none">
+              <fieldset class="process-page__fieldset">
+                <legend class="process-page__legend">Cài đặt Anti-fingerprint</legend>
+                <div class="process-page__options">
+                  <label class="process-page__checkbox-label">
+                    <input type="checkbox" id="pp-afp-flip" class="process-page__checkbox" />
+                    <span>Lật ngang (flip_h)</span>
+                  </label>
+                  <label class="process-page__checkbox-label">
+                    <input type="checkbox" id="pp-afp-vignette" class="process-page__checkbox" />
+                    <span>Vignette</span>
+                  </label>
+                  <label class="process-page__checkbox-label">
+                    <input type="checkbox" id="pp-afp-vertical" class="process-page__checkbox" />
+                    <span>Chuyển dọc</span>
+                  </label>
+                </div>
+                <div class="process-page__row" style="margin-top:12px">
+                  <div class="process-page__field">
+                    <label class="process-page__label" for="pp-afp-brightness">Độ sáng</label>
+                    <input type="number" id="pp-afp-brightness" class="process-page__input" value="0.02" step="0.01" min="-1" max="1" />
+                  </div>
+                  <div class="process-page__field">
+                    <label class="process-page__label" for="pp-afp-contrast">Tương phản</label>
+                    <input type="number" id="pp-afp-contrast" class="process-page__input" value="1.03" step="0.01" min="0.5" max="2" />
+                  </div>
+                  <div class="process-page__field">
+                    <label class="process-page__label" for="pp-afp-speed">Tốc độ</label>
+                    <input type="number" id="pp-afp-speed" class="process-page__input" value="1.0" step="0.01" min="0.5" max="2" />
+                  </div>
+                </div>
+              </fieldset>
+            </div>
 
             <!-- Nút hành động -->
             <div class="process-page__actions">
@@ -417,6 +526,9 @@ export class ProcessPage {
     const fileInput = this._element.querySelector('#pp-file');
     fileInput.addEventListener('change', this._handleFileChange);
 
+    // Nút thêm URL vào hàng chờ
+    this._element.querySelector('#pp-add-queue')?.addEventListener('click', () => this._addUrlToQueue());
+
     const refreshBtn = this._element.querySelector('#pp-queue-refresh');
     refreshBtn.addEventListener('click', () => this._loadQueue());
 
@@ -435,8 +547,16 @@ export class ProcessPage {
         this._removeQueueItem(idx);
       }
     });
-  }
 
+    // TTS engine change → sync voice options
+    this._element.querySelector('#pp-tts-engine')?.addEventListener('change', () => this._syncVoiceOptions());
+
+    // AFP toggle → show/hide settings
+    this._element.querySelector('#pp-afp')?.addEventListener('change', (e) => {
+      const settings = this._element.querySelector('#pp-afp-settings');
+      if (settings) settings.style.display = e.target.checked ? 'block' : 'none';
+    });
+  }
   // ─── Handlers ───────────────────────────────────────────────────────────────
 
   async _handleSubmit(e) {
@@ -487,6 +607,10 @@ export class ProcessPage {
       }
     }
 
+    // Track which queue item we're processing (to remove after success)
+    const processingQueueUrl = videoUrl;
+    const fromQueue = forceQueueItem || (!q('pp-url')?.value?.trim() && !this._selectedFile);
+
     const payload = {
       video_url: videoUrl,
       video_path: videoPath,
@@ -503,12 +627,20 @@ export class ProcessPage {
       keep_bgm: q('pp-keep-bgm')?.checked ?? false,
       auto_speed: q('pp-auto-speed')?.checked ?? false,
       afp_enabled: q('pp-afp')?.checked ?? false,
+      afp_flip: q('pp-afp-flip')?.checked ?? false,
+      afp_vignette: q('pp-afp-vignette')?.checked ?? false,
+      afp_vertical: q('pp-afp-vertical')?.checked ?? false,
+      afp_brightness: parseFloat(q('pp-afp-brightness')?.value || '0.02'),
+      afp_contrast: parseFloat(q('pp-afp-contrast')?.value || '1.03'),
+      afp_speed: parseFloat(q('pp-afp-speed')?.value || '1.0'),
       download_srt: q('pp-dl-srt')?.checked ?? false,
       download_ass_vi: q('pp-dl-ass-vi')?.checked ?? false,
     };
 
+    let processSuccess = false;
     try {
       await this._streamProcessVideo(payload);
+      processSuccess = true;
     } catch (err) {
       if (err.name !== 'AbortError') {
         this._logBox.addLog('error', `Lỗi kết nối: ${err.message || err}`);
@@ -517,7 +649,42 @@ export class ProcessPage {
       this._isProcessing = false;
       this._abortController = null;
       this._setSubmitState(false);
+
+      // Xóa khỏi hàng chờ sau khi xử lý xong thành công
+      if (processSuccess && processingQueueUrl) {
+        try {
+          await fetch('/api/queue/remove', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: processingQueueUrl }),
+          });
+        } catch (_) {}
+      }
       this._loadQueue();
+    }
+  }
+
+  async _addUrlToQueue() {
+    const url = this._element.querySelector('#pp-url')?.value?.trim();
+    if (!url) {
+      this._showToast('Vui lòng nhập URL trước', 'warning');
+      return;
+    }
+    try {
+      const res = await fetch('/api/queue/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify([{ url, desc: url }]),
+      }).then(r => r.json());
+      if (res?.added > 0) {
+        this._showToast('Đã thêm vào hàng chờ', 'success');
+        this._element.querySelector('#pp-url').value = '';
+        this._loadQueue();
+      } else {
+        this._showToast('URL đã có trong hàng chờ', 'info');
+      }
+    } catch (e) {
+      this._showToast('Lỗi thêm hàng chờ: ' + e.message, 'error');
     }
   }
 

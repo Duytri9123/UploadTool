@@ -224,6 +224,47 @@ export class ConfigPage {
           </div>
         </div>
 
+        <!-- Anti-fingerprint -->
+        <div class="card config-page__card" style="margin-top:16px">
+          <div class="card__header">
+            <h3 class="card__title">Anti-fingerprint (Chống dấu vân tay)</h3>
+          </div>
+          <div class="card__body config-page__grid">
+            <div class="config-page__field config-page__field--full">
+              <label class="config-page__checkbox-label">
+                <input id="vp-afp-enabled" type="checkbox" /> Bật chống dấu vân tay
+              </label>
+            </div>
+            <div class="config-page__field config-page__field--full">
+              <div class="config-page__checkboxes">
+                <label class="config-page__checkbox-label"><input id="vp-afp-flip" type="checkbox" /> Lật ngang (flip_h)</label>
+                <label class="config-page__checkbox-label"><input id="vp-afp-vignette" type="checkbox" /> Vignette</label>
+                <label class="config-page__checkbox-label"><input id="vp-afp-vertical" type="checkbox" /> Chuyển dọc</label>
+              </div>
+            </div>
+            <div class="config-page__field">
+              <label class="config-page__label" for="vp-afp-brightness">Độ sáng</label>
+              <input id="vp-afp-brightness" class="input" type="number" value="0.02" step="0.01" min="-1" max="1" />
+            </div>
+            <div class="config-page__field">
+              <label class="config-page__label" for="vp-afp-contrast">Tương phản</label>
+              <input id="vp-afp-contrast" class="input" type="number" value="1.03" step="0.01" min="0.5" max="2" />
+            </div>
+            <div class="config-page__field">
+              <label class="config-page__label" for="vp-afp-scale-w">Scale W</label>
+              <input id="vp-afp-scale-w" class="input" type="number" value="0" min="-100" max="100" />
+            </div>
+            <div class="config-page__field">
+              <label class="config-page__label" for="vp-afp-scale-h">Scale H</label>
+              <input id="vp-afp-scale-h" class="input" type="number" value="0" min="-100" max="100" />
+            </div>
+            <div class="config-page__field">
+              <label class="config-page__label" for="vp-afp-overlay-img">Overlay image path</label>
+              <input id="vp-afp-overlay-img" class="input" type="text" placeholder="Đường dẫn ảnh overlay (tuỳ chọn)" />
+            </div>
+          </div>
+        </div>
+
         <!-- Upload Settings -->
         <div class="card config-page__card">
           <div class="card__header"><h3 class="card__title">Cài Đặt Upload</h3></div>
@@ -392,6 +433,17 @@ export class ConfigPage {
     this._setChk('vp-voice', vp.voice_convert !== false);
     this._setChk('vp-keep-bg', vp.keep_bg_music || vp.keep_bg);
     this._setChk('vp-auto-speed', vp.auto_speed !== false);
+
+    const afp = vp.anti_fingerprint || {};
+    this._setChk('vp-afp-enabled', afp.enabled);
+    this._setChk('vp-afp-flip', afp.flip_h);
+    this._setChk('vp-afp-vignette', afp.vignette);
+    this._setChk('vp-afp-vertical', afp.vertical);
+    this._set('vp-afp-brightness', afp.brightness ?? 0.02);
+    this._set('vp-afp-contrast', afp.contrast ?? 1.03);
+    this._set('vp-afp-scale-w', afp.scale_w ?? 0);
+    this._set('vp-afp-scale-h', afp.scale_h ?? 0);
+    this._set('vp-afp-overlay-img', afp.overlay_image || '');
   }
 
   _buildPayload() {
@@ -455,6 +507,17 @@ export class ConfigPage {
         voice_convert: this._getChk('vp-voice'),
         keep_bg_music: this._getChk('vp-keep-bg'),
         auto_speed: this._getChk('vp-auto-speed'),
+        anti_fingerprint: {
+          enabled: this._getChk('vp-afp-enabled'),
+          flip_h: this._getChk('vp-afp-flip'),
+          vignette: this._getChk('vp-afp-vignette'),
+          vertical: this._getChk('vp-afp-vertical'),
+          brightness: parseFloat(this._get('vp-afp-brightness')) || 0.02,
+          contrast: parseFloat(this._get('vp-afp-contrast')) || 1.03,
+          scale_w: parseInt(this._get('vp-afp-scale-w')) || 0,
+          scale_h: parseInt(this._get('vp-afp-scale-h')) || 0,
+          overlay_image: this._get('vp-afp-overlay-img') || '',
+        },
       },
     };
   }

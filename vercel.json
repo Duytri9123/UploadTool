@@ -5,12 +5,11 @@
       "src": "app.py",
       "use": "@vercel/python",
       "config": {
-        "maxLambdaSize": "50mb",
-        "runtime": "python3.11"
+        "maxLambdaSize": "50mb"
       }
     },
     {
-      "src": "static/**",
+      "src": "static/dist/**",
       "use": "@vercel/static"
     }
   ],
@@ -26,12 +25,13 @@
   ],
   "env": {
     "PYTHONPATH": ".",
-    "FLASK_ENV": "production"
+    "FLASK_ENV": "production",
+    "VERCEL": "1"
   },
   "functions": {
     "app.py": {
       "maxDuration": 60,
-      "memory": 1024
+      "memory": 3008
     }
   }
 }

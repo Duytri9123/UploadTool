@@ -440,21 +440,22 @@ export class UserPage {
   /** @private */
   async _searchUser(url) {
     this._setLoading(true);
+    // Ẩn và xóa data cũ ngay lập tức
     this._hideProfile();
     this._hideToolbar();
+    if (this._gridEl) this._gridEl.innerHTML = '';
+    if (this._paginationEl) this._paginationEl.classList.add('user-page__pagination--hidden');
+    this._videos = [];
+    this._selectedIds.clear();
 
     try {
-      const translateProvider = this._element.querySelector('#up-translate-provider')?.value || '';
-      const body = { url };
-      if (translateProvider) body.translate_provider = translateProvider;
-
-      const info = await apiClient.post('/api/user_info', body);
+      // Không gửi translate_provider — dịch sau khi nhận data
+      const info = await apiClient.post('/api/user_info', { url });
       if (info.error) { this._showToast(info.error, 'error'); return; }
 
       this._userInfo = info;
       this._renderProfile(info);
 
-      // Initialise video state
       this._videos = info.videos || [];
       this._hasMore = false;
       this._nextCursor = 0;
@@ -467,10 +468,52 @@ export class UserPage {
       this._updateStatus();
       this._showToolbar();
       this._renderGrid();
+
+      // Dịch tiêu đề SAU khi đã hiển thị data gốc
+      const translateProvider = this._element.querySelector('#up-translate-provider')?.value || '';
+      if (translateProvider && this._videos.length > 0) {
+        this._translateDescs(translateProvider);
+      }
     } catch (e) {
       this._showToast(`Lỗi: ${e.message}`, 'error');
     } finally {
       this._setLoading(false);
+    }
+  }
+
+  /** @private */
+  async _translateDescs(provider) {
+    const descs = this._videos.map(v => v.desc || '');
+    const translateBtn = this._element.querySelector('#up-translate-provider');
+    if (translateBtn) translateBtn.disabled = true;
+
+    try {
+      const res = await fetch('/api/translate_descs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ descs, provider }),
+      }).then(r => r.json());
+
+      if (res.error) {
+        this._showToast(`Dịch lỗi: ${res.error}`, 'error');
+        if (translateBtn) translateBtn.value = '';
+        return;
+      }
+
+      if (res.results && res.results.length === this._videos.length) {
+        res.results.forEach((translated, i) => {
+          if (translated && translated.trim()) {
+            this._videos[i].desc = translated.trim();
+          }
+        });
+        this._renderGrid();
+        this._showToast(`Đã dịch ${this._videos.length} tiêu đề (${res.provider})`, 'success');
+      }
+    } catch (e) {
+      this._showToast(`Lỗi dịch: ${e.message}`, 'error');
+      if (translateBtn) translateBtn.value = '';
+    } finally {
+      if (translateBtn) translateBtn.disabled = false;
     }
   }
 
@@ -768,14 +811,17 @@ export class UserPage {
   }
 
   /** @private */
-  _fmtDur(seconds) {
+  _fmtDur(rawDuration) {
+    if (!rawDuration) return '';
+    // API trả về milliseconds (> 3600 thường là ms, không phải giây)
+    // Nếu giá trị > 3600 thì khả năng cao là milliseconds
+    const seconds = rawDuration > 3600 ? Math.floor(rawDuration / 1000) : Math.floor(rawDuration);
     if (!seconds) return '';
-    const s = Math.floor(seconds);
-    const m = Math.floor(s / 60);
+    const m = Math.floor(seconds / 60);
     const h = Math.floor(m / 60);
     const pad = (n) => String(n).padStart(2, '0');
-    if (h > 0) return `${h}:${pad(m % 60)}:${pad(s % 60)}`;
-    return `${m}:${pad(s % 60)}`;
+    if (h > 0) return `${h}:${pad(m % 60)}:${pad(seconds % 60)}`;
+    return `${m}:${pad(seconds % 60)}`;
   }
 
   /** @private */
