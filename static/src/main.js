@@ -132,10 +132,19 @@ function handleRouting() {
   navigateTo(pageId);
 }
 
-// ── WebSocket (disabled — using HTTP streaming instead) ───────────────────────
+// ── WebSocket ─────────────────────────────────────────────────────────────────
 function initWebSocket() {
-  // WebSocket removed — all progress uses HTTP streaming (SSE)
-  // This allows deployment on serverless platforms like Vercel
+  if (typeof io === 'undefined') return;
+  try {
+    const socket = io({ transports: ['websocket', 'polling'] });
+    socket.on('connect', () => stateManager.update('ui', { wsConnected: true }));
+    socket.on('disconnect', () => stateManager.update('ui', { wsConnected: false }));
+    socket.on('queue_update', (q) => { if (Array.isArray(q)) stateManager.set('queue', q); });
+    socket.on('progress', (d) => stateManager.update('ui', { lastProgress: d }));
+    socket.on('log', (d) => stateManager.update('ui', { lastLog: d }));
+  } catch (e) {
+    console.warn('[WS] Failed to connect:', e);
+  }
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
