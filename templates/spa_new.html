@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="vi" data-theme="">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Douyin / TikTok / YouTube Downloader">
+  <title>Douyin Downloader</title>
+
+  <!-- Preconnect for performance -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- Bundled CSS from Vite build (cache-busted) -->
+  <link rel="stylesheet" href="/static/dist/assets/main.css?v={{ jsv }}">
+
+  <!-- Inline theme init to prevent flash of wrong theme -->
+  <script>
+    (function() {
+      try {
+        var stored = localStorage.getItem('app-theme');
+        var theme = stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        if (theme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+      } catch(e) {}
+    })();
+  </script>
+</head>
+<body>
+  <!-- Skip link for keyboard accessibility -->
+  <a href="#main-content" class="skip-link">Bỏ qua điều hướng</a>
+
+  <!-- App root — populated by main.js -->
+  <div id="app" role="application" aria-label="Douyin Downloader"></div>
+
+  <!-- Socket.IO (loaded before app bundle so `io` is available) -->
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+
+  <!-- Bundled JS from Vite build (type=module for ES6 modules) -->
+  <script type="module" src="/static/dist/assets/main.js?v={{ jsv }}"></script>
+</body>
+</html>

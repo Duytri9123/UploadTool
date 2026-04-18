@@ -447,7 +447,7 @@ class SocketProgress:
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 def _render_spa(active_tab="user"):
-    return render_template("spa.html", active=active_tab, jsv=int(time.time()))
+    return render_template("spa_new.html", active=active_tab, jsv=int(time.time()))
 
 @app.route("/")
 def index():
